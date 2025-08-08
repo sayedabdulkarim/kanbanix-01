@@ -193,7 +193,7 @@ When a task card is expanded or clicked, show a detailed panel/modal with:
 - **Tabbed Content Section**:
   - **Logs Tab**:
     - Real-time log streaming area
-    - Terminal-style output display
+    - Terminal-style output display (using react-syntax-highlighter)
     - Search within logs
     - Copy logs button
     - Clear logs option
@@ -201,6 +201,22 @@ When a task card is expanded or clicked, show a detailed panel/modal with:
     - Log level filters (info, warning, error)
     - Auto-scroll toggle
     - "Show X more lines" expansion
+    
+    **Error Detection & Fix Features**:
+    - Automatic error parsing from logs
+    - Clickable error lines with hover effects
+    - Error highlighting (red text/background)
+    - "Fix Available" badges on detected errors
+    - Error types: syntax, type, build, runtime, test
+    - Quick fix suggestions panel
+    - One-click fix application
+    - Error patterns detection:
+      - TypeScript errors (type mismatches)
+      - Missing dependencies
+      - Import errors
+      - ESLint/Prettier violations
+      - Test failures
+      - Build errors
   
   - **Diffs Tab**:
     - File changes viewer
@@ -240,7 +256,38 @@ When a task card is expanded or clicked, show a detailed panel/modal with:
 - **Progress indicators** for running tasks
 - **Notification system** for changes
 
-### 6. UI/UX Design System
+### 6. Error Fix Modal
+
+When an error is detected in logs and clicked:
+
+#### Fix Suggestion Modal
+- **Modal Header**: "Fix Suggestion: [Error Type]"
+- **Error Display**:
+  - Full error message
+  - File path and line number
+  - Error category badge (Build/Type/Syntax/Runtime)
+
+- **Suggested Fixes Section**:
+  - List of possible fixes with confidence scores
+  - Each fix shows:
+    - Fix description
+    - Command or code change preview
+    - Confidence percentage (e.g., 95% match)
+    - Estimated time to apply
+  
+- **Fix Actions**:
+  - **Apply Fix** - Primary button to execute fix
+  - **Copy Command** - Copy fix command to clipboard
+  - **Create Task** - Create a new task with fix details
+  - **Ignore** - Dismiss without action
+  - **Report** - Report if fix doesn't work
+
+- **Fix Preview**:
+  - Show before/after code comparison
+  - Highlight what will change
+  - Dependencies to be installed
+
+### 7. UI/UX Design System
 
 #### Color Palette
 - **Primary colors**:
@@ -347,6 +394,9 @@ When a task card is expanded or clicked, show a detailed panel/modal with:
 - **Date Picker**: react-datepicker or date-fns
 - **Rich Text Editor**: TipTap or Lexical
 - **Icons**: Lucide React or Heroicons
+- **Log Display**: react-syntax-highlighter (lightweight, ~50KB)
+- **Diff Viewer**: react-diff-viewer or diff2html
+- **Code Display**: Prism.js or highlight.js for syntax highlighting
 
 ### Development Tools
 - **Testing**: Jest + React Testing Library
