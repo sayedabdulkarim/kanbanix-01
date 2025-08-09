@@ -4,15 +4,63 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { ArrowLeft, Plus } from 'lucide-react';
 import Link from 'next/link';
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverEvent,
+  DragStartEvent,
+  closestCorners,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragOverlay,
+  defaultDropAnimationSideEffects,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 import { useProjectStore } from '@/lib/store/useProjectStore';
-import { Project } from '@/types/project';
+import { useTaskStore } from '@/lib/store/useTaskStore';
+import { Project, Task } from '@/types/project';
+import BoardColumn from '@/components/kanban/BoardColumn';
+import TaskCard from '@/components/kanban/TaskCard';
+import TaskModal from '@/components/kanban/TaskModal';
 
 export default function ProjectBoard() {
   const params = useParams();
   const router = useRouter();
   const { getProject } = useProjectStore();
+  const { 
+    getTasksByProject, 
+    getTasksByColumn, 
+    addTask, 
+    updateTask, 
+    deleteTask,
+    moveTask,
+    reorderTasks 
+  } = useTaskStore();
+  
   const [project, setProject] = useState<Project | undefined>(undefined);
   const [mounted, setMounted] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedColumnId, setSelectedColumnId] = useState<string>('1');
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   useEffect(() => {
     setMounted(true);
@@ -40,6 +88,99 @@ export default function ProjectBoard() {
     );
   }
 
+  const projectTasks = getTasksByProject(project.id);
+  const activeTask = activeId ? projectTasks.find(t => t.id === activeId) : null;
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveId(event.active.id as string);
+  };
+
+  const handleDragOver = (event: DragOverEvent) => {
+    const { active, over } = event;
+    
+    if (!over) return;
+    
+    const activeTask = projectTasks.find(t => t.id === active.id);
+    if (!activeTask) return;
+    
+    const overColumnId = over.id as string;
+    
+    // Check if we're dragging over a column
+    if (project.columns.some(col => col.id === overColumnId)) {
+      if (activeTask.columnId !== overColumnId) {
+        moveTask(activeTask.id, overColumnId, 0);
+      }
+    }
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    
+    if (!over) {
+      setActiveId(null);
+      return;
+    }
+    
+    const activeTask = projectTasks.find(t => t.id === active.id);
+    const overTask = projectTasks.find(t => t.id === over.id);
+    
+    if (!activeTask) {
+      setActiveId(null);
+      return;
+    }
+    
+    // If dropping on another task
+    if (overTask && activeTask.columnId === overTask.columnId) {
+      const columnTasks = getTasksByColumn(project.id, activeTask.columnId);
+      const oldIndex = columnTasks.findIndex(t => t.id === activeTask.id);
+      const newIndex = columnTasks.findIndex(t => t.id === overTask.id);
+      
+      if (oldIndex !== newIndex) {
+        const newTasks = arrayMove(columnTasks, oldIndex, newIndex);
+        reorderTasks(project.id, activeTask.columnId, newTasks);
+      }
+    }
+    // If dropping on a column
+    else if (project.columns.some(col => col.id === over.id)) {
+      const newColumnId = over.id as string;
+      if (activeTask.columnId !== newColumnId) {
+        moveTask(activeTask.id, newColumnId, 0);
+      }
+    }
+    
+    setActiveId(null);
+  };
+
+  const handleAddTask = (columnId: string) => {
+    setSelectedColumnId(columnId);
+    setSelectedTask(null);
+    setIsTaskModalOpen(true);
+  };
+
+  const handleEditTask = (task: Task) => {
+    setSelectedTask(task);
+    setSelectedColumnId(task.columnId);
+    setIsTaskModalOpen(true);
+  };
+
+  const handleSaveTask = (taskData: Partial<Task>) => {
+    if (taskData.id) {
+      updateTask(taskData.id, taskData);
+    } else {
+      addTask({
+        ...taskData,
+        projectId: project.id,
+        order: getTasksByColumn(project.id, taskData.columnId!).length,
+      } as Omit<Task, 'id' | 'createdAt' | 'modifiedAt'>);
+    }
+  };
+
+  const handleDeleteTask = (taskId: string) => {
+    if (confirm('Are you sure you want to delete this task?')) {
+      deleteTask(taskId);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <div className="border-b border-border bg-card/50 backdrop-blur">
@@ -64,7 +205,10 @@ export default function ProjectBoard() {
               </div>
             </div>
             
-            <button className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors inline-flex items-center gap-2">
+            <button 
+              onClick={() => handleAddTask('1')}
+              className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
+            >
               <Plus className="h-4 w-4" />
               Add Task
             </button>
@@ -73,37 +217,58 @@ export default function ProjectBoard() {
       </div>
 
       <div className="container mx-auto px-4 py-6">
-        <div className="flex gap-4 overflow-x-auto pb-4">
-          {project.columns.map((column) => (
-            <div
-              key={column.id}
-              className="flex-shrink-0 w-80"
-            >
-              <div className="bg-card rounded-lg border border-border">
-                <div className="p-4 border-b border-border">
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="w-3 h-3 rounded-full"
-                      style={{ backgroundColor: column.color }}
-                    />
-                    <h3 className="font-medium">{column.name}</h3>
-                    <span className="ml-auto text-sm text-muted-foreground">0</span>
-                  </div>
-                </div>
-                
-                <div className="p-4 min-h-[400px]">
-                  <div className="text-center py-8 text-muted-foreground">
-                    <p className="text-sm">No tasks yet</p>
-                    <button className="mt-2 text-primary hover:underline text-sm">
-                      Create your first task
-                    </button>
-                  </div>
-                </div>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDragEnd={handleDragEnd}
+        >
+          <div className="flex gap-4 overflow-x-auto pb-4">
+            {project.columns.map((column) => {
+              const columnTasks = getTasksByColumn(project.id, column.id);
+              
+              return (
+                <BoardColumn
+                  key={column.id}
+                  column={column}
+                  tasks={columnTasks}
+                  onAddTask={() => handleAddTask(column.id)}
+                  onEditTask={handleEditTask}
+                  onDeleteTask={handleDeleteTask}
+                />
+              );
+            })}
+          </div>
+          
+          <DragOverlay
+            dropAnimation={{
+              sideEffects: defaultDropAnimationSideEffects({
+                styles: {
+                  active: {
+                    opacity: '0.5',
+                  },
+                },
+              }),
+            }}
+          >
+            {activeTask ? (
+              <div className="rotate-3 opacity-90">
+                <TaskCard task={activeTask} />
               </div>
-            </div>
-          ))}
-        </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
       </div>
+
+      <TaskModal
+        open={isTaskModalOpen}
+        onOpenChange={setIsTaskModalOpen}
+        onSave={handleSaveTask}
+        task={selectedTask}
+        columnId={selectedColumnId}
+        columns={project.columns}
+      />
     </div>
   );
 }
