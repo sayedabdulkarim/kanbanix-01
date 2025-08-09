@@ -1,103 +1,124 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useState, useEffect } from 'react';
+import { Plus, Search } from 'lucide-react';
+import ProjectCard from '@/components/projects/ProjectCard';
+import CreateProjectModal from '@/components/projects/CreateProjectModal';
+import { useProjectStore } from '@/lib/store/useProjectStore';
+import { cn } from '@/lib/utils/cn';
+
+export default function ProjectsDashboard() {
+  const { projects, addProject, deleteProject } = useProjectStore();
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const filteredProjects = projects.filter((project) =>
+    project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    project.techStack.some((tech) =>
+      tech.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+  );
+
+  const handleCreateProject = (projectData: {
+    name: string;
+    description?: string;
+    type: 'ai-agent' | 'standard' | 'template';
+    techStack: string[];
+  }) => {
+    addProject(projectData);
+  };
+
+  const handleDeleteProject = (id: string) => {
+    if (confirm('Are you sure you want to delete this project?')) {
+      deleteProject(id);
+    }
+  };
+
+  if (!mounted) {
+    return null;
+  }
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+    <div className="min-h-screen bg-background">
+      <div className="container mx-auto px-4 py-8">
+        <div className="mb-8 text-center">
+          <h1 className="text-4xl font-bold mb-4">Your AI Projects</h1>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+
+        <div className="mb-6 max-w-md mx-auto">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search projects..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          {filteredProjects.map((project) => (
+            <ProjectCard
+              key={project.id}
+              project={project}
+              onDelete={handleDeleteProject}
+            />
+          ))}
+
+          <button
+            onClick={() => setIsCreateModalOpen(true)}
+            className={cn(
+              "h-64 rounded-2xl border-2 border-dashed border-border",
+              "flex flex-col items-center justify-center gap-4",
+              "hover:border-primary hover:bg-secondary/50 transition-all cursor-pointer group"
+            )}
+          >
+            <div className="p-4 rounded-full bg-secondary group-hover:bg-primary/10 transition-colors">
+              <Plus className="h-8 w-8 text-muted-foreground group-hover:text-primary transition-colors" />
+            </div>
+            <span className="text-lg font-medium text-muted-foreground group-hover:text-primary transition-colors">
+              Create New Project
+            </span>
+          </button>
+        </div>
+
+        {filteredProjects.length === 0 && searchQuery && (
+          <div className="text-center py-12">
+            <p className="text-muted-foreground">
+              No projects found matching "{searchQuery}"
+            </p>
+          </div>
+        )}
+
+        {projects.length === 0 && !searchQuery && (
+          <div className="text-center py-12">
+            <h2 className="text-2xl font-semibold mb-2">No projects yet</h2>
+            <p className="text-muted-foreground mb-6">
+              Create your first project to get started
+            </p>
+            <button
+              onClick={() => setIsCreateModalOpen(true)}
+              className="px-6 py-3 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
+            >
+              <Plus className="h-5 w-5" />
+              Create Project
+            </button>
+          </div>
+        )}
+      </div>
+
+      <CreateProjectModal
+        open={isCreateModalOpen}
+        onOpenChange={setIsCreateModalOpen}
+        onCreateProject={handleCreateProject}
+      />
     </div>
   );
 }
