@@ -2,8 +2,9 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Plus } from 'lucide-react';
+import { ArrowLeft, Plus, Loader2 } from 'lucide-react';
 import Link from 'next/link';
+import { useSession } from 'next-auth/react';
 import {
   DndContext,
   DragEndEvent,
@@ -21,35 +22,34 @@ import {
   arrayMove,
   sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
-import { useProjectStore } from '@/lib/store/useProjectStore';
-import { useTaskStore } from '@/lib/store/useTaskStore';
-import { Project, Task } from '@/types/project';
+import { Project, Task, Column } from '@/types/project';
 import { cn } from '@/lib/utils/cn';
 import BoardColumn from '@/components/kanban/BoardColumn';
 import TaskCard from '@/components/kanban/TaskCard';
 import TaskModal from '@/components/kanban/TaskModal';
 import TaskDetailsSplitView from '@/components/kanban/TaskDetailsSplitView';
 
+interface ProjectData {
+  id: string;
+  name: string;
+  description: string;
+  gradient: string;
+  columns: Column[];
+  tasks: Task[];
+}
+
 export default function ProjectBoard() {
   const params = useParams();
   const router = useRouter();
-  const { getProject } = useProjectStore();
-  const { 
-    getTasksByProject, 
-    getTasksByColumn, 
-    addTask, 
-    updateTask, 
-    deleteTask,
-    moveTask,
-    reorderTasks 
-  } = useTaskStore();
+  const { data: session, status } = useSession();
   
-  const [project, setProject] = useState<Project | undefined>(undefined);
-  const [mounted, setMounted] = useState(false);
+  const [project, setProject] = useState<ProjectData | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [selectedColumnId, setSelectedColumnId] = useState<string>('1');
+  const [selectedColumnId, setSelectedColumnId] = useState<string>('');
   const [selectedTaskForDetails, setSelectedTaskForDetails] = useState<Task | null>(null);
 
   const sensors = useSensors(
@@ -64,33 +64,72 @@ export default function ProjectBoard() {
   );
 
   useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    if (mounted && params.projectId) {
-      const foundProject = getProject(params.projectId as string);
-      if (foundProject) {
-        setProject(foundProject);
-      } else {
-        router.push('/');
-      }
+    if (status === 'unauthenticated') {
+      router.push('/');
+      return;
     }
-  }, [params.projectId, getProject, router, mounted]);
+    
+    if (status === 'authenticated' && params.projectId) {
+      fetchProject();
+    }
+  }, [params.projectId, status, router]);
 
-  if (!mounted || !project) {
+  const fetchProject = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch(`/api/projects/${params.projectId}`);
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          router.push('/');
+          return;
+        }
+        throw new Error('Failed to fetch project');
+      }
+      
+      const data = await response.json();
+      setProject(data);
+      setTasks(data.tasks || []);
+      if (data.columns && data.columns.length > 0) {
+        setSelectedColumnId(data.columns[0].id);
+      }
+    } catch (error) {
+      console.error('Error fetching project:', error);
+      router.push('/');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading || status === 'loading') {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">Loading project...</p>
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+          <p className="text-muted-foreground">Loading project...</p>
         </div>
       </div>
     );
   }
 
-  const projectTasks = getTasksByProject(project.id);
-  const activeTask = activeId ? projectTasks.find(t => t.id === activeId) : null;
+  if (!project) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-muted-foreground">Project not found</p>
+          <Link href="/" className="text-primary hover:underline mt-2 inline-block">
+            Back to projects
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  const getTasksByColumn = (columnId: string) => {
+    return tasks.filter(task => task.columnId === columnId).sort((a, b) => a.order - b.order);
+  };
+
+  const activeTask = activeId ? tasks.find(t => t.id === activeId) : null;
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveId(event.active.id as string);
@@ -101,7 +140,7 @@ export default function ProjectBoard() {
     
     if (!over) return;
     
-    const activeTask = projectTasks.find(t => t.id === active.id);
+    const activeTask = tasks.find(t => t.id === active.id);
     if (!activeTask) return;
     
     const overColumnId = over.id as string;
@@ -122,8 +161,8 @@ export default function ProjectBoard() {
       return;
     }
     
-    const activeTask = projectTasks.find(t => t.id === active.id);
-    const overTask = projectTasks.find(t => t.id === over.id);
+    const activeTask = tasks.find(t => t.id === active.id);
+    const overTask = tasks.find(t => t.id === over.id);
     
     if (!activeTask) {
       setActiveId(null);
@@ -132,20 +171,37 @@ export default function ProjectBoard() {
     
     // If dropping on another task
     if (overTask && activeTask.columnId === overTask.columnId) {
-      const columnTasks = getTasksByColumn(project.id, activeTask.columnId);
+      const columnTasks = getTasksByColumn(activeTask.columnId);
       const oldIndex = columnTasks.findIndex(t => t.id === activeTask.id);
       const newIndex = columnTasks.findIndex(t => t.id === overTask.id);
       
       if (oldIndex !== newIndex) {
         const newTasks = arrayMove(columnTasks, oldIndex, newIndex);
-        reorderTasks(project.id, activeTask.columnId, newTasks);
+        // TODO: Update task order in database
+        setTasks(prevTasks => {
+          const updatedTasks = [...prevTasks];
+          newTasks.forEach((task, index) => {
+            const taskIndex = updatedTasks.findIndex(t => t.id === task.id);
+            if (taskIndex !== -1) {
+              updatedTasks[taskIndex] = { ...updatedTasks[taskIndex], order: index };
+            }
+          });
+          return updatedTasks;
+        });
       }
     }
     // If dropping on a column
     else if (project.columns.some(col => col.id === over.id)) {
       const newColumnId = over.id as string;
       if (activeTask.columnId !== newColumnId) {
-        moveTask(activeTask.id, newColumnId, 0);
+        // TODO: Update task column in database
+        setTasks(prevTasks => 
+          prevTasks.map(t => 
+            t.id === activeTask.id 
+              ? { ...t, columnId: newColumnId, order: 0 }
+              : t
+          )
+        );
       }
     }
     
@@ -164,21 +220,16 @@ export default function ProjectBoard() {
     setIsTaskModalOpen(true);
   };
 
-  const handleSaveTask = (taskData: Partial<Task>) => {
-    if (taskData.id) {
-      updateTask(taskData.id, taskData);
-    } else {
-      addTask({
-        ...taskData,
-        projectId: project.id,
-        order: getTasksByColumn(project.id, taskData.columnId!).length,
-      } as Omit<Task, 'id' | 'createdAt' | 'modifiedAt'>);
-    }
+  const handleSaveTask = async (taskData: Partial<Task>) => {
+    // TODO: Implement task save to database
+    console.log('Save task:', taskData);
+    setIsTaskModalOpen(false);
   };
 
-  const handleDeleteTask = (taskId: string) => {
+  const handleDeleteTask = async (taskId: string) => {
     if (confirm('Are you sure you want to delete this task?')) {
-      deleteTask(taskId);
+      // TODO: Implement task delete from database
+      setTasks(prevTasks => prevTasks.filter(t => t.id !== taskId));
       if (selectedTaskForDetails?.id === taskId) {
         setSelectedTaskForDetails(null);
       }
@@ -189,10 +240,14 @@ export default function ProjectBoard() {
     setSelectedTaskForDetails(task);
   };
 
-  const handleUpdateTaskFromDetails = (taskId: string, updates: Partial<Task>) => {
-    updateTask(taskId, updates);
-    // Update the details task with the new data
-    const updatedTask = projectTasks.find(t => t.id === taskId);
+  const handleUpdateTaskFromDetails = async (taskId: string, updates: Partial<Task>) => {
+    // TODO: Implement task update in database
+    setTasks(prevTasks => 
+      prevTasks.map(t => 
+        t.id === taskId ? { ...t, ...updates } : t
+      )
+    );
+    const updatedTask = tasks.find(t => t.id === taskId);
     if (updatedTask) {
       setSelectedTaskForDetails({ ...updatedTask, ...updates });
     }
@@ -223,7 +278,7 @@ export default function ProjectBoard() {
             </div>
             
             <button 
-              onClick={() => handleAddTask('1')}
+              onClick={() => handleAddTask(selectedColumnId)}
               className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
             >
               <Plus className="h-4 w-4" />
@@ -248,7 +303,7 @@ export default function ProjectBoard() {
                 !selectedTaskForDetails && "justify-center"
               )}>
                 {project.columns.map((column) => {
-                  const columnTasks = getTasksByColumn(project.id, column.id);
+                  const columnTasks = getTasksByColumn(column.id);
                   
                   return (
                     <BoardColumn
