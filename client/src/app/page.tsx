@@ -129,22 +129,41 @@ function Dashboard() {
     description?: string;
     type: 'ai-agent' | 'standard' | 'template';
     techStack: string[];
+    createGithubRepo?: boolean;
+    isPrivate?: boolean;
   }) => {
     try {
+      setIsCreateModalOpen(false);
+      
       const response = await fetch('/api/projects', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(projectData),
+        body: JSON.stringify({
+          name: projectData.name,
+          description: projectData.description,
+          createGithubRepo: projectData.createGithubRepo || false,
+          isPrivate: projectData.isPrivate || false,
+        }),
       });
       
       if (response.ok) {
+        const result = await response.json();
         await fetchProjects();
-        setIsCreateModalOpen(false);
+        
+        // Show success message
+        if (projectData.createGithubRepo && result.project?.githubUrl) {
+          console.log(`Project created with GitHub repo: ${result.project.githubUrl}`);
+        }
+      } else {
+        const error = await response.json();
+        console.error('Error creating project:', error);
+        alert(error.error || 'Failed to create project');
       }
     } catch (error) {
       console.error('Error creating project:', error);
+      alert('Failed to create project. Please try again.');
     }
   };
 

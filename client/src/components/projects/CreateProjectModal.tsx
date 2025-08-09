@@ -15,6 +15,8 @@ interface CreateProjectModalProps {
     description?: string;
     type: 'ai-agent' | 'standard' | 'template';
     techStack: string[];
+    createGithubRepo?: boolean;
+    isPrivate?: boolean;
   }) => void;
 }
 
@@ -46,6 +48,8 @@ export default function CreateProjectModal({
   const [projectType, setProjectType] = useState<'ai-agent' | 'standard' | 'template'>('standard');
   const [selectedTech, setSelectedTech] = useState<string[]>([]);
   const [aiEnabled, setAiEnabled] = useState(false);
+  const [createGithubRepo, setCreateGithubRepo] = useState(true);
+  const [isPrivate, setIsPrivate] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,6 +60,8 @@ export default function CreateProjectModal({
       description: description || undefined,
       type: projectType,
       techStack: selectedTech,
+      createGithubRepo,
+      isPrivate,
     });
 
     setProjectName('');
@@ -63,6 +69,8 @@ export default function CreateProjectModal({
     setProjectType('standard');
     setSelectedTech([]);
     setAiEnabled(false);
+    setCreateGithubRepo(true);
+    setIsPrivate(false);
     onOpenChange(false);
   };
 
@@ -204,6 +212,47 @@ export default function CreateProjectModal({
                 </Label.Root>
               </div>
             )}
+
+            {/* GitHub Integration Section */}
+            <div className="space-y-3 pt-2 border-t border-border">
+              <Label.Root className="text-sm font-medium text-foreground">
+                GitHub Integration
+              </Label.Root>
+              
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="create-github-repo"
+                  checked={createGithubRepo}
+                  onChange={(e) => setCreateGithubRepo(e.target.checked)}
+                  className="h-4 w-4 rounded border-input"
+                />
+                <Label.Root htmlFor="create-github-repo" className="text-sm">
+                  Create GitHub repository
+                </Label.Root>
+              </div>
+
+              {createGithubRepo && (
+                <div className="ml-6 flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="private-repo"
+                    checked={isPrivate}
+                    onChange={(e) => setIsPrivate(e.target.checked)}
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  <Label.Root htmlFor="private-repo" className="text-sm text-muted-foreground">
+                    Make repository private
+                  </Label.Root>
+                </div>
+              )}
+
+              {createGithubRepo && (
+                <p className="text-xs text-muted-foreground ml-6">
+                  A new GitHub repository will be created with the project name and automatically linked to this Kanban project.
+                </p>
+              )}
+            </div>
 
             <div className="flex gap-3 pt-4">
               <button
