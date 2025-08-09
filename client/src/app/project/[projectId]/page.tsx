@@ -19,16 +19,16 @@ import {
 } from '@dnd-kit/core';
 import {
   arrayMove,
-  SortableContext,
   sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { useProjectStore } from '@/lib/store/useProjectStore';
 import { useTaskStore } from '@/lib/store/useTaskStore';
 import { Project, Task } from '@/types/project';
+import { cn } from '@/lib/utils/cn';
 import BoardColumn from '@/components/kanban/BoardColumn';
 import TaskCard from '@/components/kanban/TaskCard';
 import TaskModal from '@/components/kanban/TaskModal';
+import TaskDetailsSplitView from '@/components/kanban/TaskDetailsSplitView';
 
 export default function ProjectBoard() {
   const params = useParams();
@@ -50,6 +50,7 @@ export default function ProjectBoard() {
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [selectedColumnId, setSelectedColumnId] = useState<string>('1');
+  const [selectedTaskForDetails, setSelectedTaskForDetails] = useState<Task | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -178,6 +179,22 @@ export default function ProjectBoard() {
   const handleDeleteTask = (taskId: string) => {
     if (confirm('Are you sure you want to delete this task?')) {
       deleteTask(taskId);
+      if (selectedTaskForDetails?.id === taskId) {
+        setSelectedTaskForDetails(null);
+      }
+    }
+  };
+
+  const handleTaskClick = (task: Task) => {
+    setSelectedTaskForDetails(task);
+  };
+
+  const handleUpdateTaskFromDetails = (taskId: string, updates: Partial<Task>) => {
+    updateTask(taskId, updates);
+    // Update the details task with the new data
+    const updatedTask = projectTasks.find(t => t.id === taskId);
+    if (updatedTask) {
+      setSelectedTaskForDetails({ ...updatedTask, ...updates });
     }
   };
 
@@ -216,49 +233,68 @@ export default function ProjectBoard() {
         </div>
       </div>
 
-      <div className="container mx-auto px-4 py-6">
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCorners}
-          onDragStart={handleDragStart}
-          onDragOver={handleDragOver}
-          onDragEnd={handleDragEnd}
-        >
-          <div className="flex gap-4 overflow-x-auto pb-4">
-            {project.columns.map((column) => {
-              const columnTasks = getTasksByColumn(project.id, column.id);
-              
-              return (
-                <BoardColumn
-                  key={column.id}
-                  column={column}
-                  tasks={columnTasks}
-                  onAddTask={() => handleAddTask(column.id)}
-                  onEditTask={handleEditTask}
-                  onDeleteTask={handleDeleteTask}
-                />
-              );
-            })}
-          </div>
-          
-          <DragOverlay
-            dropAnimation={{
-              sideEffects: defaultDropAnimationSideEffects({
-                styles: {
-                  active: {
-                    opacity: '0.5',
-                  },
-                },
-              }),
-            }}
-          >
-            {activeTask ? (
-              <div className="rotate-3 opacity-90">
-                <TaskCard task={activeTask} />
+      <div className="flex h-[calc(100vh-8rem)]">
+        <div className={selectedTaskForDetails ? "w-1/2" : "w-full"}>
+          <div className="h-full overflow-x-auto overflow-y-hidden">
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCorners}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDragEnd={handleDragEnd}
+            >
+              <div className={cn(
+                "flex gap-4 p-6 h-full min-w-fit",
+                !selectedTaskForDetails && "justify-center"
+              )}>
+                {project.columns.map((column) => {
+                  const columnTasks = getTasksByColumn(project.id, column.id);
+                  
+                  return (
+                    <BoardColumn
+                      key={column.id}
+                      column={column}
+                      tasks={columnTasks}
+                      onAddTask={() => handleAddTask(column.id)}
+                      onEditTask={handleEditTask}
+                      onDeleteTask={handleDeleteTask}
+                      onTaskClick={handleTaskClick}
+                    />
+                  );
+                })}
               </div>
-            ) : null}
-          </DragOverlay>
-        </DndContext>
+              
+              <DragOverlay
+                dropAnimation={{
+                  sideEffects: defaultDropAnimationSideEffects({
+                    styles: {
+                      active: {
+                        opacity: '0.5',
+                      },
+                    },
+                  }),
+                }}
+              >
+                {activeTask ? (
+                  <div className="rotate-3 opacity-90">
+                    <TaskCard task={activeTask} />
+                  </div>
+                ) : null}
+              </DragOverlay>
+            </DndContext>
+          </div>
+        </div>
+
+        {selectedTaskForDetails && (
+          <div className="w-1/2 h-full border-l border-border overflow-hidden">
+            <TaskDetailsSplitView
+              task={selectedTaskForDetails}
+              onClose={() => setSelectedTaskForDetails(null)}
+              onUpdateTask={handleUpdateTaskFromDetails}
+              onDeleteTask={handleDeleteTask}
+            />
+          </div>
+        )}
       </div>
 
       <TaskModal

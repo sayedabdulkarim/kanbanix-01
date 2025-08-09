@@ -121,7 +121,7 @@ export default function CreateProjectModal({
               <Label.Root className="text-sm font-medium">
                 Project Type
               </Label.Root>
-              <Select.Root value={projectType} onValueChange={(value: any) => setProjectType(value)}>
+              <Select.Root value={projectType} onValueChange={(value) => setProjectType(value as 'ai-agent' | 'standard' | 'template')}>
                 <Select.Trigger className="w-full px-3 py-2 rounded-lg border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring flex items-center justify-between">
                   <Select.Value />
                   <Select.Icon>

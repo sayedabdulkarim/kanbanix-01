@@ -11,9 +11,10 @@ interface TaskCardProps {
   task: Task;
   onEdit?: (task: Task) => void;
   onDelete?: (taskId: string) => void;
+  onClick?: (task: Task) => void;
 }
 
-export default function TaskCard({ task, onEdit, onDelete }: TaskCardProps) {
+export default function TaskCard({ task, onEdit, onDelete, onClick }: TaskCardProps) {
   const {
     attributes,
     listeners,
@@ -64,6 +65,7 @@ export default function TaskCard({ task, onEdit, onDelete }: TaskCardProps) {
         "group relative bg-card rounded-lg border border-border p-3 cursor-move hover:shadow-md transition-all",
         isDragging && "opacity-50 shadow-lg"
       )}
+      onClick={() => onClick?.(task)}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">

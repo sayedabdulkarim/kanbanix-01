@@ -22,7 +22,7 @@
     --radius: 0.5rem;
   }
 
-  .dark {
+  :root.dark {
     --background: 10 14 39;
     --foreground: 237 237 237;
     --card: 26 29 58;
@@ -93,29 +93,4 @@
     text-decoration: none;
   }
 
-  @media (prefers-color-scheme: dark) {
-    html {
-      color-scheme: dark;
-    }
-    
-    :root {
-      --background: 10 14 39;
-      --foreground: 237 237 237;
-      --card: 26 29 58;
-      --card-foreground: 237 237 237;
-      --primary: 102 126 234;
-      --primary-foreground: 255 255 255;
-      --secondary: 26 29 58;
-      --secondary-foreground: 237 237 237;
-      --muted: 37 40 69;
-      --muted-foreground: 156 163 175;
-      --accent: 118 75 162;
-      --accent-foreground: 255 255 255;
-      --destructive: 239 68 68;
-      --destructive-foreground: 255 255 255;
-      --border: 45 49 85;
-      --input: 45 49 85;
-      --ring: 102 126 234;
-    }
-  }
 }

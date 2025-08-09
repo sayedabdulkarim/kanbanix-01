@@ -30,7 +30,11 @@ export default function ProjectsDashboard() {
     type: 'ai-agent' | 'standard' | 'template';
     techStack: string[];
   }) => {
-    addProject(projectData);
+    addProject({
+      ...projectData,
+      gradient: '',  // Will be auto-generated in store
+      initials: '',  // Will be auto-generated in store
+    });
   };
 
   const handleDeleteProject = (id: string) => {
@@ -92,7 +96,7 @@ export default function ProjectsDashboard() {
         {filteredProjects.length === 0 && searchQuery && (
           <div className="text-center py-12">
             <p className="text-muted-foreground">
-              No projects found matching "{searchQuery}"
+              No projects found matching &quot;{searchQuery}&quot;
             </p>
           </div>
         )}

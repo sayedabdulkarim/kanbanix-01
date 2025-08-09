@@ -6,7 +6,6 @@ import * as Label from '@radix-ui/react-label';
 import * as Select from '@radix-ui/react-select';
 import { X, ChevronDown, Check } from 'lucide-react';
 import { Task, Column } from '@/types/project';
-import { cn } from '@/lib/utils/cn';
 
 interface TaskModalProps {
   open: boolean;
@@ -192,7 +191,7 @@ export default function TaskModal({
                 <Label.Root className="text-sm font-medium">
                   Priority
                 </Label.Root>
-                <Select.Root value={priority} onValueChange={(value: any) => setPriority(value)}>
+                <Select.Root value={priority} onValueChange={(value) => setPriority(value as 'low' | 'medium' | 'high')}>
                   <Select.Trigger className="w-full px-3 py-2 rounded-lg border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring flex items-center justify-between">
                     <Select.Value />
                     <Select.Icon>
