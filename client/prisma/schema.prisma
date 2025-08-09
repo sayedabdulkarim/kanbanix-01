@@ -1,0 +1,238 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// NextAuth required tables
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+  
+  @@unique([identifier, token])
+}
+
+// User model for authentication
+model User {
+  id            String    @id @default(cuid())
+  email         String?   @unique
+  name          String?
+  image         String?   // NextAuth uses 'image' not 'avatarUrl'
+  emailVerified DateTime?
+  
+  // NextAuth relations
+  accounts      Account[]
+  sessions      Session[]
+  
+  // Custom fields
+  githubId      String?   @unique
+  githubToken   String?   // Encrypted GitHub access token
+  
+  // App Relations
+  projects      Project[]
+  tasks         Task[]    @relation("TaskAssignee")
+  comments      Comment[]
+  activities    Activity[]
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  @@index([githubId])
+}
+
+// Project model linked to GitHub repository
+model Project {
+  id            String    @id @default(cuid())
+  name          String
+  description   String?
+  gradient      String?   // For UI gradient display
+  
+  // GitHub Integration
+  githubRepoId  String?   @unique
+  githubRepoUrl String?
+  githubOwner   String?   // Repository owner (user/org)
+  githubRepo    String?   // Repository name
+  
+  // Relations
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  columns       Column[]
+  tasks         Task[]
+  webhooks      Webhook[]
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  @@index([userId])
+  @@index([githubRepoId])
+}
+
+// Column model for Kanban board
+model Column {
+  id        String   @id @default(cuid())
+  name      String
+  order     Int
+  color     String?  // Optional column color
+  
+  // Relations
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks     Task[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@unique([projectId, order])
+  @@index([projectId])
+}
+
+// Task model linked to GitHub issues/PRs
+model Task {
+  id                 String    @id @default(cuid())
+  title              String
+  description        String?
+  status             String    // todo, inProgress, inReview, done, cancelled
+  priority           String?   // low, medium, high
+  order              Int
+  
+  // GitHub Integration
+  githubIssueNumber  Int?
+  githubPrNumber     Int?
+  githubBranch       String?
+  githubIssueId      String?   @unique
+  githubPrId         String?   @unique
+  githubState        String?   // open, closed, merged
+  
+  // Time tracking
+  startedAt          DateTime?
+  completedAt        DateTime?
+  dueDate            DateTime?
+  timeEstimate       Int?      // in hours
+  timeSpent          Int?      // in hours
+  
+  // Relations
+  projectId          String
+  project            Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  columnId           String
+  column             Column    @relation(fields: [columnId], references: [id])
+  assigneeId         String?
+  assignee           User?     @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  
+  // Metadata
+  labels             Label[]
+  comments           Comment[]
+  activities         Activity[]
+  
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  
+  @@index([projectId])
+  @@index([columnId])
+  @@index([githubIssueNumber])
+  @@index([githubPrNumber])
+}
+
+// Label model for task categorization
+model Label {
+  id        String   @id @default(cuid())
+  name      String
+  color     String
+  
+  // Relations
+  tasks     Task[]
+  
+  @@unique([name])
+}
+
+// Comment model synced with GitHub
+model Comment {
+  id               String    @id @default(cuid())
+  content          String
+  githubCommentId  String?   @unique
+  
+  // Relations
+  taskId           String
+  task             Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId         String
+  author           User      @relation(fields: [authorId], references: [id])
+  
+  edited           Boolean   @default(false)
+  editedAt         DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  
+  @@index([taskId])
+  @@index([githubCommentId])
+}
+
+// Activity log for tracking changes
+model Activity {
+  id          String   @id @default(cuid())
+  type        String   // created, updated, commented, statusChanged, assigned, etc.
+  description String
+  metadata    String?  // JSON string for additional data
+  
+  // Relations
+  taskId      String?
+  task        Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  
+  @@index([taskId])
+  @@index([userId])
+}
+
+// Webhook configuration for GitHub
+model Webhook {
+  id         String   @id @default(cuid())
+  webhookId  String   @unique // GitHub webhook ID
+  secret     String   // Webhook secret for verification
+  events     String   // JSON array of events
+  active     Boolean  @default(true)
+  
+  // Relations
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  
+  @@index([projectId])
+  @@index([webhookId])
+}

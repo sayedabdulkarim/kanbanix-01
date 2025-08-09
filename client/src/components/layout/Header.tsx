@@ -2,12 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Server, Settings, FileText, Moon, Sun } from 'lucide-react';
+import { useSession, signIn, signOut } from 'next-auth/react';
+import { Home, Server, Settings, FileText, Moon, Sun, Github, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useState, useEffect } from 'react';
 
 export default function Header() {
   const pathname = usePathname();
+  const { data: session, status } = useSession();
   const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
@@ -90,9 +92,39 @@ export default function Header() {
               )}
             </button>
 
-            <div className="h-8 w-8 rounded-full bg-gradient-to-r from-primary to-accent flex items-center justify-center text-white text-sm font-medium">
-              U
-            </div>
+            {status === 'loading' ? (
+              <div className="h-8 w-8 rounded-full bg-secondary animate-pulse"></div>
+            ) : session ? (
+              <div className="flex items-center gap-3">
+                <div className="hidden sm:flex items-center gap-2">
+                  <img
+                    src={session.user?.image || ''}
+                    alt={session.user?.name || 'User'}
+                    className="h-6 w-6 rounded-full"
+                  />
+                  <span className="text-sm font-medium">{session.user?.name}</span>
+                </div>
+                <button
+                  onClick={() => signOut()}
+                  className="p-2 rounded-lg hover:bg-secondary transition-colors"
+                  aria-label="Sign out"
+                  title="Sign out"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => signIn('github', { 
+                  callbackUrl: window.location.href 
+                })}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                <Github className="h-4 w-4" />
+                <span className="hidden sm:inline">Sign in with GitHub</span>
+                <span className="sm:hidden">Sign in</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
