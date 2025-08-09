@@ -2,12 +2,15 @@
 
 import { signIn, getSession } from 'next-auth/react';
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Github } from 'lucide-react';
 
 export default function SignIn() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const error = searchParams.get('error');
+  const callbackUrl = searchParams.get('callbackUrl') || '/';
 
   useEffect(() => {
     // Check if user is already signed in
@@ -24,7 +27,7 @@ export default function SignIn() {
     setLoading(true);
     try {
       await signIn('github', { 
-        callbackUrl: '/',
+        callbackUrl,
         redirect: true,
       });
     } catch (error) {
@@ -45,6 +48,16 @@ export default function SignIn() {
             Connect your GitHub account to get started
           </p>
         </div>
+
+        {error && (
+          <div className="mb-4 p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
+            <p className="text-sm text-destructive text-center">
+              {error === 'Callback' 
+                ? 'Authentication failed. Please try signing in again.'
+                : `Error: ${error}`}
+            </p>
+          </div>
+        )}
 
         <div className="mt-8 space-y-4">
           <button

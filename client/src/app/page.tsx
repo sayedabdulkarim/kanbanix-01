@@ -2,10 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Search, Github, Loader2 } from 'lucide-react';
 import ProjectCard from '@/components/projects/ProjectCard';
 import CreateProjectModal from '@/components/projects/CreateProjectModal';
-import { useProjectStore } from '@/lib/store/useProjectStore';
+import RepositorySelector from '@/components/github/RepositorySelector';
 import { cn } from '@/lib/utils/cn';
 
 // Landing page component for unauthenticated users
@@ -92,9 +92,30 @@ function LandingPage() {
 
 // Dashboard component for authenticated users
 function Dashboard() {
-  const { projects, addProject, deleteProject } = useProjectStore();
+  const [projects, setProjects] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isRepositorySelectorOpen, setIsRepositorySelectorOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    fetchProjects();
+  }, []);
+
+  const fetchProjects = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch('/api/projects');
+      if (response.ok) {
+        const data = await response.json();
+        setProjects(data);
+      }
+    } catch (error) {
+      console.error('Error fetching projects:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const filteredProjects = projects.filter((project) =>
     project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -103,32 +124,85 @@ function Dashboard() {
     )
   );
 
-  const handleCreateProject = (projectData: {
+  const handleCreateProject = async (projectData: {
     name: string;
     description?: string;
     type: 'ai-agent' | 'standard' | 'template';
     techStack: string[];
   }) => {
-    addProject({
-      ...projectData,
-      gradient: '',  // Will be auto-generated in store
-      initials: '',  // Will be auto-generated in store
-    });
+    try {
+      const response = await fetch('/api/projects', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(projectData),
+      });
+      
+      if (response.ok) {
+        await fetchProjects();
+        setIsCreateModalOpen(false);
+      }
+    } catch (error) {
+      console.error('Error creating project:', error);
+    }
   };
 
-  const handleDeleteProject = (id: string) => {
+  const handleDeleteProject = async (id: string) => {
     if (confirm('Are you sure you want to delete this project?')) {
-      deleteProject(id);
+      try {
+        const response = await fetch(`/api/projects?id=${id}`, {
+          method: 'DELETE',
+        });
+        
+        if (response.ok) {
+          await fetchProjects();
+        }
+      } catch (error) {
+        console.error('Error deleting project:', error);
+      }
     }
   };
 
   return (
     <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-8">
-        <div className="mb-8 text-center">
-          <h1 className="text-4xl font-bold mb-4">Your Projects</h1>
+        <div className="mb-8">
+          <div className="text-center mb-6">
+            <h1 className="text-4xl font-bold mb-4">Your Projects</h1>
+            <p className="text-muted-foreground">
+              Manage your GitHub repositories as Kanban projects
+            </p>
+          </div>
+          
+          {/* Action buttons */}
+          <div className="flex justify-center gap-4 mb-6">
+            <button
+              onClick={() => setIsRepositorySelectorOpen(true)}
+              className="flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+            >
+              <Github className="h-5 w-5" />
+              Import from GitHub
+            </button>
+            <button
+              onClick={() => setIsCreateModalOpen(true)}
+              className="flex items-center gap-2 px-6 py-3 border border-input rounded-lg hover:bg-secondary transition-colors"
+            >
+              <Plus className="h-5 w-5" />
+              Create New Project
+            </button>
+          </div>
         </div>
 
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="text-center">
+              <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+              <p className="text-muted-foreground">Loading projects...</p>
+            </div>
+          </div>
+        ) : (
+          <>
         <div className="mb-6 max-w-md mx-auto">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -191,6 +265,8 @@ function Dashboard() {
             </button>
           </div>
         )}
+          </>
+        )}
       </div>
 
       <CreateProjectModal
@@ -198,6 +274,18 @@ function Dashboard() {
         onOpenChange={setIsCreateModalOpen}
         onCreateProject={handleCreateProject}
       />
+
+      {isRepositorySelectorOpen && (
+        <RepositorySelector
+          onSelectRepository={async (repo) => {
+            console.log('Selected repository:', repo);
+            setIsRepositorySelectorOpen(false);
+            // Refresh projects after import
+            setTimeout(() => fetchProjects(), 1000);
+          }}
+          onClose={() => setIsRepositorySelectorOpen(false)}
+        />
+      )}
     </div>
   );
 }

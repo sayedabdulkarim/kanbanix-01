@@ -41,11 +41,14 @@ export async function GET(request: NextRequest) {
       name: project.name,
       description: project.description,
       gradient: project.gradient,
+      initials: project.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2),
       githubUrl: project.githubRepoUrl,
+      techStack: [], // TODO: Extract from GitHub languages API
+      type: project.githubRepoId ? 'github' : 'standard',
       tasksCount: project.columns.reduce((total, col) => total + col.tasks.length, 0),
       columnsCount: project.columns.length,
       createdAt: project.createdAt,
-      updatedAt: project.updatedAt,
+      modifiedAt: project.updatedAt,
     }));
 
     return NextResponse.json(formattedProjects);
