@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "kanbanix-mcp": {
+      "command": "node",
+      "args": [
+        "/Users/saykarim/Desktop/Kanban_board/kanbanix-01/mcp-server/src/index.js"
+      ],
+      "env": {
+        "NODE_ENV": "development",
+        "MCP_MODE": "desktop"
+      }
+    }
+  }
+}

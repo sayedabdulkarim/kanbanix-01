@@ -1,0 +1,24 @@
+{
+  "name": "kanbanix-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Kanbanix AI task automation",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "start:desktop": "node --env-file=.env.desktop src/index.js",
+    "start:api": "node --env-file=.env.api src/index.js",
+    "dev": "node --watch --env-file=.env.desktop src/index.js",
+    "dev:api": "node --watch --env-file=.env.api src/index.js",
+    "test": "node --test",
+    "info": "node -e \"import('./src/config.js').then(c => console.log(JSON.stringify(c.mcpConfig, null, 2)))\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.6.0",
+    "glob": "^10.3.10",
+    "simple-git": "^3.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0"
+  }
+}
