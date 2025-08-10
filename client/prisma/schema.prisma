@@ -144,6 +144,10 @@ model Task {
   timeEstimate       Int?      // in hours
   timeSpent          Int?      // in hours
   
+  // AI Agent Integration
+  agentEnabled       Boolean   @default(false)  // Whether this task can be executed by AI
+  agentType          String?   // code_generator, bug_fixer, documentation, etc.
+  
   // Relations
   projectId          String
   project            Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -156,6 +160,7 @@ model Task {
   labels             Label[]
   comments           Comment[]
   activities         Activity[]
+  agentExecutions    AgentExecution[]
   
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
@@ -235,4 +240,69 @@ model Webhook {
   
   @@index([projectId])
   @@index([webhookId])
+}
+
+// AI Agent Execution tracking
+model AgentExecution {
+  id          String   @id @default(cuid())
+  
+  // Task relation
+  taskId      String
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  // Execution details
+  status      String   // pending, running, success, failed, cancelled
+  agentType   String   // code_generator, bug_fixer, documentation, etc.
+  
+  // Timing
+  startedAt   DateTime?
+  completedAt DateTime?
+  duration    Int?     // in milliseconds
+  attempts    Int      @default(1)
+  
+  // Progress tracking
+  currentStep String?
+  progress    Int      @default(0) // 0-100
+  
+  // Input data
+  input       String   // JSON string with task details, requirements, context
+  
+  // Output data
+  summary     String?  // Agent execution summary
+  errors      String?  // JSON string with error details
+  changes     String?  // JSON string with file changes
+  
+  // Metadata
+  mcpMode     String?  // desktop or api
+  modelUsed   String?  // claude-3-opus-20240229, etc.
+  
+  // Relations
+  logs        AgentLog[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([taskId])
+  @@index([status])
+  @@index([agentType])
+}
+
+// Real-time agent logs
+model AgentLog {
+  id          String   @id @default(cuid())
+  
+  // Agent execution relation
+  executionId String
+  execution   AgentExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  
+  // Log details
+  level       String   // info, warning, error, debug
+  message     String
+  timestamp   DateTime @default(now())
+  
+  // Optional metadata
+  metadata    String?  // JSON string with file, line, component info
+  
+  @@index([executionId])
+  @@index([timestamp])
 }
