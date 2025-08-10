@@ -38,3 +38,7 @@
    - Export/Import functionality
    - Keyboard shortcuts
    - Command palette
+
+   ====AI Integration starts=====
+
+   feature/mcp-ai-integration
