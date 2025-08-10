@@ -15,7 +15,7 @@ const prisma = new PrismaClient({
 // POST /api/projects/[projectId]/sync-github - Sync all project tasks with GitHub
 export async function POST(
   request: NextRequest,
-  { params }: { params: { projectId: string } }
+  { params }: { params: Promise<{ projectId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -23,10 +23,11 @@ export async function POST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { projectId } = await params;
     // Get project with tasks
     const project = await prisma.project.findFirst({
       where: {
-        id: params.projectId,
+        id: projectId,
         userId: session.user.id,
       },
       include: {
@@ -149,7 +150,7 @@ export async function POST(
 // GET /api/projects/[projectId]/sync-github - Get sync status for all tasks
 export async function GET(
   request: NextRequest,
-  { params }: { params: { projectId: string } }
+  { params }: { params: Promise<{ projectId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -157,9 +158,10 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { projectId } = await params;
     const project = await prisma.project.findFirst({
       where: {
-        id: params.projectId,
+        id: projectId,
         userId: session.user.id,
       },
       include: {

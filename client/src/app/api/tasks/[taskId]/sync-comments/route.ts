@@ -15,7 +15,7 @@ const prisma = new PrismaClient({
 // POST /api/tasks/[taskId]/sync-comments - Sync GitHub comments to database
 export async function POST(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -23,10 +23,11 @@ export async function POST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { taskId } = await params;
     // Get task with project details
     const task = await prisma.task.findFirst({
       where: {
-        id: params.taskId,
+        id: taskId,
         project: {
           userId: session.user.id,
         },
@@ -204,7 +205,7 @@ export async function POST(
 // GET /api/tasks/[taskId]/sync-comments - Get sync status for comments
 export async function GET(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -212,9 +213,10 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { taskId } = await params;
     const task = await prisma.task.findFirst({
       where: {
-        id: params.taskId,
+        id: taskId,
         project: {
           userId: session.user.id,
         },

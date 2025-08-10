@@ -15,7 +15,7 @@ const prisma = new PrismaClient({
 // PUT /api/tasks/[taskId]/comments/[commentId] - Update comment
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { taskId: string; commentId: string } }
+  { params }: { params: Promise<{ taskId: string; commentId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -32,11 +32,12 @@ export async function PUT(
       );
     }
 
+    const { taskId, commentId } = await params;
     // Get comment with task and project details
     const comment = await prisma.comment.findFirst({
       where: {
-        id: params.commentId,
-        taskId: params.taskId,
+        id: commentId,
+        taskId: taskId,
         task: {
           project: {
             userId: session.user.id,
@@ -89,7 +90,7 @@ export async function PUT(
 
     // Update comment in database
     const updatedComment = await prisma.comment.update({
-      where: { id: params.commentId },
+      where: { id: commentId },
       data: {
         content: content.trim(),
         edited: true,
@@ -136,7 +137,7 @@ export async function PUT(
 // DELETE /api/tasks/[taskId]/comments/[commentId] - Delete comment
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { taskId: string; commentId: string } }
+  { params }: { params: Promise<{ taskId: string; commentId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -144,11 +145,12 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { taskId, commentId } = await params;
     // Get comment with task and project details
     const comment = await prisma.comment.findFirst({
       where: {
-        id: params.commentId,
-        taskId: params.taskId,
+        id: commentId,
+        taskId: taskId,
         task: {
           project: {
             userId: session.user.id,
@@ -196,7 +198,7 @@ export async function DELETE(
 
     // Delete comment from database
     await prisma.comment.delete({
-      where: { id: params.commentId },
+      where: { id: commentId },
     });
 
     // Create activity log

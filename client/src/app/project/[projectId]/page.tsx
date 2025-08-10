@@ -129,6 +129,32 @@ export default function ProjectBoard() {
     return tasks.filter(task => task.columnId === columnId).sort((a, b) => a.order - b.order);
   };
 
+  const moveTask = async (taskId: string, newColumnId: string, newOrder: number) => {
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          columnId: newColumnId,
+          order: newOrder,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to move task');
+      }
+
+      const updatedTask = await response.json();
+      setTasks(prevTasks =>
+        prevTasks.map(t => t.id === taskId ? updatedTask : t)
+      );
+    } catch (error) {
+      console.error('Error moving task:', error);
+    }
+  };
+
   const activeTask = activeId ? tasks.find(t => t.id === activeId) : null;
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -221,17 +247,78 @@ export default function ProjectBoard() {
   };
 
   const handleSaveTask = async (taskData: Partial<Task>) => {
-    // TODO: Implement task save to database
-    console.log('Save task:', taskData);
-    setIsTaskModalOpen(false);
+    try {
+      if (selectedTask) {
+        // Update existing task
+        const response = await fetch(`/api/tasks/${selectedTask.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(taskData),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to update task');
+        }
+
+        const updatedTask = await response.json();
+        setTasks(prevTasks =>
+          prevTasks.map(t => t.id === selectedTask.id ? updatedTask : t)
+        );
+        
+        // Update selected task if it's being viewed in details
+        if (selectedTaskForDetails?.id === selectedTask.id) {
+          setSelectedTaskForDetails(updatedTask);
+        }
+      } else {
+        // Create new task
+        const response = await fetch('/api/tasks', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            ...taskData,
+            projectId: project?.id,
+            columnId: selectedColumnId,
+            order: getTasksByColumn(selectedColumnId).length,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to create task');
+        }
+
+        const newTask = await response.json();
+        setTasks(prevTasks => [...prevTasks, newTask]);
+      }
+
+      setIsTaskModalOpen(false);
+    } catch (error) {
+      console.error('Error saving task:', error);
+      alert('Failed to save task. Please try again.');
+    }
   };
 
   const handleDeleteTask = async (taskId: string) => {
     if (confirm('Are you sure you want to delete this task?')) {
-      // TODO: Implement task delete from database
-      setTasks(prevTasks => prevTasks.filter(t => t.id !== taskId));
-      if (selectedTaskForDetails?.id === taskId) {
-        setSelectedTaskForDetails(null);
+      try {
+        const response = await fetch(`/api/tasks/${taskId}`, {
+          method: 'DELETE',
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to delete task');
+        }
+
+        setTasks(prevTasks => prevTasks.filter(t => t.id !== taskId));
+        if (selectedTaskForDetails?.id === taskId) {
+          setSelectedTaskForDetails(null);
+        }
+      } catch (error) {
+        console.error('Error deleting task:', error);
+        alert('Failed to delete task. Please try again.');
       }
     }
   };
@@ -241,15 +328,33 @@ export default function ProjectBoard() {
   };
 
   const handleUpdateTaskFromDetails = async (taskId: string, updates: Partial<Task>) => {
-    // TODO: Implement task update in database
-    setTasks(prevTasks => 
-      prevTasks.map(t => 
-        t.id === taskId ? { ...t, ...updates } : t
-      )
-    );
-    const updatedTask = tasks.find(t => t.id === taskId);
-    if (updatedTask) {
-      setSelectedTaskForDetails({ ...updatedTask, ...updates });
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updates),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update task');
+      }
+
+      const updatedTask = await response.json();
+      setTasks(prevTasks => 
+        prevTasks.map(t => 
+          t.id === taskId ? updatedTask : t
+        )
+      );
+      
+      // Update selected task details if it's being viewed
+      if (selectedTaskForDetails?.id === taskId) {
+        setSelectedTaskForDetails(updatedTask);
+      }
+    } catch (error) {
+      console.error('Error updating task:', error);
+      alert('Failed to update task. Please try again.');
     }
   };
 

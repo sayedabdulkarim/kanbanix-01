@@ -15,7 +15,7 @@ const prisma = new PrismaClient({
 // POST /api/tasks/[taskId]/github-conversations/[conversationId]/resolve
 export async function POST(
   request: NextRequest,
-  { params }: { params: { taskId: string; conversationId: string } }
+  { params }: { params: Promise<{ taskId: string; conversationId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -23,10 +23,11 @@ export async function POST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { taskId, conversationId } = await params;
     // Get task with project details
     const task = await prisma.task.findFirst({
       where: {
-        id: params.taskId,
+        id: taskId,
         project: {
           userId: session.user.id,
         },
@@ -65,7 +66,7 @@ export async function POST(
       `;
 
       // Convert comment ID to thread ID format that GitHub expects
-      const threadId = `PRReviewThread_${params.conversationId}`;
+      const threadId = `PRReviewThread_${conversationId}`;
 
       const result = await octokit.graphql(graphqlQuery, {
         threadId: threadId,
@@ -83,7 +84,7 @@ export async function POST(
 
       return NextResponse.json({
         success: true,
-        conversationId: params.conversationId,
+        conversationId: conversationId,
         resolved: true,
         result: result,
       });
@@ -96,7 +97,7 @@ export async function POST(
           owner: task.project.githubOwner,
           repo: task.project.githubRepo,
           pull_number: task.githubPrNumber,
-          comment_id: parseInt(params.conversationId),
+          comment_id: parseInt(conversationId),
           body: '✅ **Resolved** - This conversation has been marked as resolved from Kanbanix.',
         });
 
@@ -127,7 +128,7 @@ export async function POST(
 // DELETE /api/tasks/[taskId]/github-conversations/[conversationId]/resolve - Unresolve
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { taskId: string; conversationId: string } }
+  { params }: { params: Promise<{ taskId: string; conversationId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -135,9 +136,10 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { taskId, conversationId } = await params;
     const task = await prisma.task.findFirst({
       where: {
-        id: params.taskId,
+        id: taskId,
         project: {
           userId: session.user.id,
         },
@@ -174,7 +176,7 @@ export async function DELETE(
         }
       `;
 
-      const threadId = `PRReviewThread_${params.conversationId}`;
+      const threadId = `PRReviewThread_${conversationId}`;
 
       const result = await octokit.graphql(graphqlQuery, {
         threadId: threadId,
@@ -192,7 +194,7 @@ export async function DELETE(
 
       return NextResponse.json({
         success: true,
-        conversationId: params.conversationId,
+        conversationId: conversationId,
         resolved: false,
         result: result,
       });

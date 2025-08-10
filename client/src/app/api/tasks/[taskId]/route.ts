@@ -15,7 +15,7 @@ const prisma = new PrismaClient({
 // GET /api/tasks/[taskId] - Get single task
 export async function GET(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -23,9 +23,10 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { taskId } = await params;
     const task = await prisma.task.findFirst({
       where: {
-        id: params.taskId,
+        id: taskId,
         project: {
           userId: session.user.id,
         },
@@ -104,7 +105,7 @@ export async function GET(
 // PUT /api/tasks/[taskId] - Update task
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -112,12 +113,13 @@ export async function PUT(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { taskId } = await params;
     const updates = await request.json();
 
     // Verify user owns the task
     const existingTask = await prisma.task.findFirst({
       where: {
-        id: params.taskId,
+        id: taskId,
         project: {
           userId: session.user.id,
         },
@@ -147,7 +149,7 @@ export async function PUT(
 
     // Update the task
     const updatedTask = await prisma.task.update({
-      where: { id: params.taskId },
+      where: { id: taskId },
       data: filteredUpdates,
       include: {
         assignee: true,
@@ -185,7 +187,7 @@ export async function PUT(
           
           // Update task's GitHub state
           await prisma.task.update({
-            where: { id: params.taskId },
+            where: { id: taskId },
             data: { githubState },
           });
           
@@ -270,7 +272,7 @@ export async function PUT(
 // DELETE /api/tasks/[taskId] - Delete task
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -278,10 +280,11 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { taskId } = await params;
     // Verify user owns the task
     const task = await prisma.task.findFirst({
       where: {
-        id: params.taskId,
+        id: taskId,
         project: {
           userId: session.user.id,
         },
@@ -294,7 +297,7 @@ export async function DELETE(
 
     // Delete the task (cascade will handle related records)
     await prisma.task.delete({
-      where: { id: params.taskId },
+      where: { id: taskId },
     });
 
     return NextResponse.json({ message: 'Task deleted successfully' });

@@ -15,7 +15,7 @@ const prisma = new PrismaClient({
 // POST /api/tasks/[taskId]/sync-github - Sync task with GitHub issue
 export async function POST(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -25,10 +25,11 @@ export async function POST(
 
     const { action } = await request.json(); // 'open', 'close', 'reopen'
 
+    const { taskId } = await params;
     // Get task with project details
     const task = await prisma.task.findFirst({
       where: {
-        id: params.taskId,
+        id: taskId,
         project: {
           userId: session.user.id,
         },
@@ -91,7 +92,7 @@ export async function POST(
 
     // Update task in database
     const updatedTask = await prisma.task.update({
-      where: { id: params.taskId },
+      where: { id: taskId },
       data: {
         status: taskStatus,
         githubState: githubState,
@@ -129,7 +130,7 @@ export async function POST(
 // GET /api/tasks/[taskId]/sync-github - Get GitHub sync status
 export async function GET(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -137,10 +138,11 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { taskId } = await params;
     // Get task with project details
     const task = await prisma.task.findFirst({
       where: {
-        id: params.taskId,
+        id: taskId,
         project: {
           userId: session.user.id,
         },

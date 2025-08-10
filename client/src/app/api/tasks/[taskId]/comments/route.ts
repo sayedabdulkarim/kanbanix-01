@@ -15,7 +15,7 @@ const prisma = new PrismaClient({
 // GET /api/tasks/[taskId]/comments - Fetch unified comments from DB and GitHub
 export async function GET(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -23,10 +23,11 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { taskId } = await params;
     // Get task with project details
     const task = await prisma.task.findFirst({
       where: {
-        id: params.taskId,
+        id: taskId,
         project: {
           userId: session.user.id,
         },
@@ -130,7 +131,7 @@ export async function GET(
 // POST /api/tasks/[taskId]/comments - Create new comment and optionally post to GitHub
 export async function POST(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -147,10 +148,11 @@ export async function POST(
       );
     }
 
+    const { taskId } = await params;
     // Get task with project details
     const task = await prisma.task.findFirst({
       where: {
-        id: params.taskId,
+        id: taskId,
         project: {
           userId: session.user.id,
         },
