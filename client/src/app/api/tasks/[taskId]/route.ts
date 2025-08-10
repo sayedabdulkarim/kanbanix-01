@@ -215,6 +215,66 @@ export async function PUT(
       }
     }
 
+    // AI Agent Auto-Trigger: Check if status changed to "inProgress"
+    let aiExecutionTriggered = false;
+    if (filteredUpdates.status === 'inProgress' && 
+        existingTask.status !== 'inProgress' &&
+        process.env.AI_AUTO_EXECUTE_ON_DRAG !== 'false') {
+      
+      try {
+        // Dynamic import to avoid circular dependencies
+        const { AIAgentService, AgentType } = await import('@/lib/services/aiAgentService');
+        const aiService = new AIAgentService();
+        
+        // Determine agent type based on task content
+        const agentType = determineAgentType(updatedTask.title, updatedTask.description || '');
+        
+        // Enable AI for this task and execute
+        await prisma.task.update({
+          where: { id: taskId },
+          data: {
+            agentEnabled: true,
+            agentType,
+            startedAt: new Date()
+          }
+        });
+
+        // Execute AI agent
+        await aiService.executeTask(taskId, agentType, {
+          projectPath: process.cwd(),
+          autoTrigger: true,
+          userId: session.user.id
+        });
+
+        aiExecutionTriggered = true;
+
+        // Log AI execution trigger
+        await prisma.activity.create({
+          data: {
+            type: 'ai_execution_started',
+            description: `AI agent (${agentType}) automatically started execution`,
+            taskId: updatedTask.id,
+            userId: session.user.id,
+            metadata: JSON.stringify({
+              agentType,
+              autoTriggered: true
+            })
+          },
+        });
+      } catch (aiError: any) {
+        console.error('AI agent trigger error:', aiError);
+        // Log error but don't fail the task update
+        await prisma.activity.create({
+          data: {
+            type: 'error',
+            description: `Failed to start AI agent: ${aiError.message}`,
+            taskId: updatedTask.id,
+            userId: session.user.id,
+          },
+        });
+      }
+    }
+
     // Create activity log for significant changes
     const significantChanges = ['status', 'columnId', 'assigneeId'];
     for (const field of significantChanges) {
@@ -223,6 +283,9 @@ export async function PUT(
         switch (field) {
           case 'status':
             description = `Task status changed from ${existingTask.status} to ${filteredUpdates[field]}`;
+            if (filteredUpdates[field] === 'inProgress' && aiExecutionTriggered) {
+              description += ' (AI agent started automatically)';
+            }
             break;
           case 'columnId':
             description = `Task moved to different column`;
@@ -308,4 +371,37 @@ export async function DELETE(
       { status: 500 }
     );
   }
+}
+
+// Helper function to determine agent type based on task content
+function determineAgentType(title: string, description: string): string {
+  const content = (title + ' ' + description).toLowerCase();
+
+  // Bug fixing keywords
+  if (content.match(/\b(fix|bug|error|issue|problem|broken|debug)\b/)) {
+    return 'bug_fixer';
+  }
+
+  // Testing keywords  
+  if (content.match(/\b(test|testing|spec|unit test|integration test)\b/)) {
+    return 'testing';
+  }
+
+  // Documentation keywords
+  if (content.match(/\b(document|docs|readme|comment|documentation)\b/)) {
+    return 'documentation';
+  }
+
+  // Refactoring keywords
+  if (content.match(/\b(refactor|optimize|clean|improve|restructure)\b/)) {
+    return 'refactoring';
+  }
+
+  // Review keywords
+  if (content.match(/\b(review|audit|check|validate|examine)\b/)) {
+    return 'review';
+  }
+
+  // Default to code generation
+  return 'code_generator';
 }
