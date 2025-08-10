@@ -172,3 +172,52 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+// DELETE /api/projects - Delete a project
+export async function DELETE(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Get the project ID from the URL search params
+    const { searchParams } = new URL(request.url);
+    const projectId = searchParams.get('id');
+
+    if (!projectId) {
+      return NextResponse.json({ error: 'Project ID is required' }, { status: 400 });
+    }
+
+    // Verify the user owns the project
+    const project = await prisma.project.findFirst({
+      where: {
+        id: projectId,
+        userId: session.user.id,
+      },
+    });
+
+    if (!project) {
+      return NextResponse.json({ error: 'Project not found or unauthorized' }, { status: 404 });
+    }
+
+    // Delete the project (cascade will handle related records)
+    await prisma.project.delete({
+      where: {
+        id: projectId,
+      },
+    });
+
+    return NextResponse.json({ 
+      success: true,
+      message: 'Project deleted successfully',
+      deletedProjectId: projectId,
+    });
+  } catch (error: any) {
+    console.error('Error deleting project:', error);
+    return NextResponse.json(
+      { error: 'Failed to delete project', details: error.message },
+      { status: 500 }
+    );
+  }
+}
