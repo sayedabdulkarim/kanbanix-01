@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { PrismaClient } from '@prisma/client';
 import { Octokit } from '@octokit/rest';
 import { authOptions } from '../../auth/[...nextauth]/route';
+import path from 'path';
 
 const prisma = new PrismaClient({
   datasources: {
@@ -269,7 +270,7 @@ export async function PUT(
         console.log('Task AI settings updated');
 
         // Get workspace path for the project
-        const workspacePath = `/tmp/workspace/${existingTask.projectId}`;
+        const workspacePath = path.join(process.cwd(), 'projects', existingTask.projectId);
         
         // Execute AI agent with workspace context
         console.log('Calling AI service executeTask with workspace:', workspacePath);

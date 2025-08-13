@@ -1,5 +1,6 @@
 // Kanbanix AI Agent Service - Adapted from SynthAI with MCP Integration
 import { PrismaClient } from '@prisma/client';
+import path from 'path';
 
 // Agent Types based on KANBANIX_AI_WORKFLOW_SPEC
 export enum AgentType {
@@ -134,7 +135,7 @@ export class AIAgentService {
     }
 
     // Use workspace path if provided, otherwise generate from projectId
-    const workspacePath = context.workspacePath || `/tmp/workspace/${task.projectId}`;
+    const workspacePath = context.workspacePath || path.join(process.cwd(), 'projects', task.projectId);
 
     // Create agent execution record
     const execution = await this.prisma.agentExecution.create({

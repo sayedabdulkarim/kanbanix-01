@@ -12,7 +12,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const WORKSPACE_BASE = '/tmp/workspace';
+const WORKSPACE_BASE = path.join(process.cwd(), 'client', 'projects');
 
 async function cleanWorkspace(projectId) {
   const workspacePath = path.join(WORKSPACE_BASE, projectId);

@@ -8,7 +8,7 @@ import path from 'path';
 const prisma = new PrismaClient();
 
 const WORKSPACE_CONFIG = {
-  basePath: process.env.WORKSPACE_PATH || '/tmp/workspace',
+  basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), 'projects'),
 };
 
 export async function POST(request: NextRequest) {
