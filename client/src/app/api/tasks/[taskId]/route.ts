@@ -268,10 +268,15 @@ export async function PUT(
         });
         console.log('Task AI settings updated');
 
-        // Execute AI agent
-        console.log('Calling AI service executeTask...');
+        // Get workspace path for the project
+        const workspacePath = `/tmp/workspace/${existingTask.projectId}`;
+        
+        // Execute AI agent with workspace context
+        console.log('Calling AI service executeTask with workspace:', workspacePath);
         await aiService.executeTask(taskId, agentType, {
-          projectPath: process.cwd(),
+          projectPath: workspacePath,
+          workspacePath: workspacePath,
+          projectId: existingTask.projectId,
           autoTrigger: true,
           userId: session.user.id
         });

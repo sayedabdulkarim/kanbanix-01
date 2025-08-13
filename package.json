@@ -10,7 +10,9 @@
     "install:all": "npm install && cd client && npm install && cd ../mcp-server && npm install",
     "postinstall": "cd client && npm install && cd ../mcp-server && npm install",
     "build": "cd client && npm run build",
-    "start": "concurrently -n \"CLIENT,MCP\" -c \"blue,green\" \"cd client && npm start\" \"cd mcp-server && npm start\""
+    "start": "concurrently -n \"CLIENT,MCP\" -c \"blue,green\" \"cd client && npm start\" \"cd mcp-server && npm start\"",
+    "workspace:clean": "node scripts/cleanup-workspace.js",
+    "workspace:clean:all": "echo y | node scripts/cleanup-workspace.js"
   },
   "devDependencies": {
     "concurrently": "^9.2.0"

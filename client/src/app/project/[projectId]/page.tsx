@@ -1,10 +1,11 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Loader2 } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { ArrowLeft, Plus, Loader2, RefreshCw, GitBranch } from 'lucide-react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
+import workspaceService from '@/lib/services/workspaceService';
 import {
   DndContext,
   DragEndEvent,
@@ -46,6 +47,8 @@ export default function ProjectBoard() {
   const [project, setProject] = useState<ProjectData | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [workspaceStatus, setWorkspaceStatus] = useState<any>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -63,6 +66,46 @@ export default function ProjectBoard() {
     })
   );
 
+  // Cleanup workspace on unmount or when leaving the page
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      const tasksInProgress = tasks.filter(t => t.status === 'inProgress');
+      if (tasksInProgress.length > 0) {
+        e.preventDefault();
+        e.returnValue = 'You have tasks in progress. Are you sure you want to leave?';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [tasks]);
+
+  // Navigation guard for workspace cleanup
+  const handleLeaveProject = useCallback(async () => {
+    const tasksInProgress = tasks.filter(t => t.status === 'inProgress');
+    
+    if (tasksInProgress.length > 0) {
+      const confirmed = confirm(
+        `You have ${tasksInProgress.length} task(s) in progress. They will be reset to TODO if you leave. Continue?`
+      );
+      if (!confirmed) return false;
+    }
+
+    try {
+      setWorkspaceLoading(true);
+      await workspaceService.leaveWorkspace(params.projectId as string);
+      return true;
+    } catch (error) {
+      console.error('Error leaving workspace:', error);
+      return true; // Allow navigation even if cleanup fails
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  }, [tasks, params.projectId]);
+
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.push('/');
@@ -70,13 +113,70 @@ export default function ProjectBoard() {
     }
     
     if (status === 'authenticated' && params.projectId) {
-      fetchProject();
+      initializeProject();
     }
   }, [params.projectId, status, router]);
 
-  const fetchProject = async () => {
+  const initializeProject = async () => {
     try {
       setLoading(true);
+      
+      // First fetch project data
+      await fetchProject();
+      
+      // Then enter workspace
+      await enterWorkspace();
+      
+    } catch (error) {
+      console.error('Error initializing project:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const enterWorkspace = async () => {
+    try {
+      setWorkspaceLoading(true);
+      const result = await workspaceService.enterWorkspace(params.projectId as string);
+      console.log('Workspace entered:', result);
+      
+      // Fetch workspace status
+      const status = await workspaceService.getWorkspaceStatus(params.projectId as string);
+      setWorkspaceStatus(status);
+    } catch (error) {
+      console.error('Error entering workspace:', error);
+      // Show warning but don't block UI
+      console.warn('Continuing without workspace. GitHub operations will be limited.');
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  };
+
+  const refreshWorkspace = async () => {
+    try {
+      setWorkspaceLoading(true);
+      const result = await workspaceService.refreshWorkspace(params.projectId as string);
+      
+      if (result.hasUncommittedChanges) {
+        const discard = confirm('You have uncommitted changes. Discard them and pull latest?');
+        if (discard) {
+          await workspaceService.refreshWorkspace(params.projectId as string, true);
+        }
+      }
+      
+      // Update workspace status
+      const status = await workspaceService.getWorkspaceStatus(params.projectId as string);
+      setWorkspaceStatus(status);
+    } catch (error) {
+      console.error('Error refreshing workspace:', error);
+      alert('Failed to refresh workspace');
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  };
+
+  const fetchProject = async () => {
+    try {
       const response = await fetch(`/api/projects/${params.projectId}`);
       
       if (!response.ok) {
@@ -96,8 +196,6 @@ export default function ProjectBoard() {
     } catch (error) {
       console.error('Error fetching project:', error);
       router.push('/');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -428,12 +526,17 @@ export default function ProjectBoard() {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <Link
-                href="/"
+              <button
+                onClick={async () => {
+                  const canLeave = await handleLeaveProject();
+                  if (canLeave) {
+                    router.push('/');
+                  }
+                }}
                 className="p-2 rounded-lg hover:bg-secondary transition-colors"
               >
                 <ArrowLeft className="h-5 w-5" />
-              </Link>
+              </button>
               <div>
                 <nav className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
                   <Link href="/" className="hover:text-foreground transition-colors">
@@ -442,17 +545,38 @@ export default function ProjectBoard() {
                   <span>/</span>
                   <span className="text-foreground">{project.name}</span>
                 </nav>
-                <h1 className="text-xl font-semibold">{project.name}</h1>
+                <div className="flex items-center gap-4">
+                  <h1 className="text-xl font-semibold">{project.name}</h1>
+                  {workspaceStatus?.workspace?.git && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <GitBranch className="h-4 w-4" />
+                      <span>{workspaceStatus.workspace.git.branch}</span>
+                      {workspaceStatus.workspace.git.hasUncommittedChanges && (
+                        <span className="text-yellow-500">• Modified</span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
             
-            <button 
-              onClick={() => handleAddTask(selectedColumnId)}
-              className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
-            >
-              <Plus className="h-4 w-4" />
-              Add Task
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={refreshWorkspace}
+                disabled={workspaceLoading}
+                className="p-2 rounded-lg hover:bg-secondary transition-colors disabled:opacity-50"
+                title="Refresh workspace"
+              >
+                <RefreshCw className={cn("h-5 w-5", workspaceLoading && "animate-spin")} />
+              </button>
+              <button 
+                onClick={() => handleAddTask(selectedColumnId)}
+                className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
+              >
+                <Plus className="h-4 w-4" />
+                Add Task
+              </button>
+            </div>
           </div>
         </div>
       </div>

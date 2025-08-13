@@ -133,6 +133,9 @@ export class AIAgentService {
       throw new AIAgentServiceError(`Task ${taskId} not found`);
     }
 
+    // Use workspace path if provided, otherwise generate from projectId
+    const workspacePath = context.workspacePath || `/tmp/workspace/${task.projectId}`;
+
     // Create agent execution record
     const execution = await this.prisma.agentExecution.create({
       data: {
@@ -147,8 +150,9 @@ export class AIAgentService {
           requirements: this.extractRequirements(task.description || ''),
           context: {
             baseBranch: 'main',
-            workingDirectory: process.cwd(),
-            projectPath: context.projectPath || process.cwd(),
+            workingDirectory: workspacePath,
+            projectPath: workspacePath,
+            projectId: task.projectId,
             ...context
           }
         }),
@@ -237,7 +241,8 @@ export class AIAgentService {
     
     // Get execution context
     const execution = await this.prisma.agentExecution.findUnique({
-      where: { id: executionId }
+      where: { id: executionId },
+      include: { task: true }
     });
     
     if (!execution) throw new Error('Execution not found');
@@ -250,7 +255,9 @@ export class AIAgentService {
     const mcpResult = await this.callMCPTool('generate_task_code', {
       task_title: input.title,
       task_description: input.description,
-      context: input.context
+      context: input.context,
+      projectId: execution.task.projectId,
+      workspacePath: input.context.workspacePath || `/tmp/workspace/${execution.task.projectId}`
     });
 
     await this.updateProgress(executionId, 80, 'Processing generated code');
@@ -269,7 +276,8 @@ export class AIAgentService {
     await this.updateProgress(executionId, 20, 'Analyzing bug report');
     
     const execution = await this.prisma.agentExecution.findUnique({
-      where: { id: executionId }
+      where: { id: executionId },
+      include: { task: true }
     });
     
     if (!execution) throw new Error('Execution not found');
@@ -280,7 +288,9 @@ export class AIAgentService {
     
     const mcpResult = await this.callMCPTool('fix_bug', {
       bug_description: input.description,
-      context: input.context
+      context: input.context,
+      projectId: execution.task.projectId,
+      workspacePath: input.context.workspacePath || `/tmp/workspace/${execution.task.projectId}`
     });
 
     await this.addExecutionLog(executionId, 'info', `Bug fix generated for: ${input.title}`);
@@ -329,7 +339,10 @@ export class AIAgentService {
           },
           body: JSON.stringify({
             tool: toolName,
-            params: params
+            params: {
+              ...params,
+              projectId: params.projectId || params.context?.projectId
+            }
           })
         });
 

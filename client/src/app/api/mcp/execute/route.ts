@@ -29,8 +29,14 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
+    // Add workspace path to params if projectId is provided
+    let enhancedParams = { ...params };
+    if (params.projectId) {
+      enhancedParams.workspacePath = `/tmp/workspace/${params.projectId}`;
+    }
+
     // Execute MCP tool via stdio
-    const result = await executeMCPTool(tool, params);
+    const result = await executeMCPTool(tool, enhancedParams);
     
     return NextResponse.json(result);
 
