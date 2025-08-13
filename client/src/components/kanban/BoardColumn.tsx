@@ -14,6 +14,7 @@ interface BoardColumnProps {
   onEditTask?: (task: Task) => void;
   onDeleteTask?: (taskId: string) => void;
   onTaskClick?: (task: Task) => void;
+  onViewExecution?: (task: Task) => void;
 }
 
 export default function BoardColumn({
@@ -23,6 +24,7 @@ export default function BoardColumn({
   onEditTask,
   onDeleteTask,
   onTaskClick,
+  onViewExecution,
 }: BoardColumnProps) {
   const { isOver, setNodeRef } = useDroppable({
     id: column.id,
@@ -76,6 +78,7 @@ export default function BoardColumn({
                     onEdit={onEditTask}
                     onDelete={onDeleteTask}
                     onClick={onTaskClick}
+                    onViewExecution={onViewExecution}
                   />
                 ))}
               </div>

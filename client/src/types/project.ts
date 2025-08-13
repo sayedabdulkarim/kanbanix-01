@@ -47,6 +47,8 @@ export interface Task {
   relatedTasks?: string[];
   blockedBy?: string[];
   metadata?: TaskMetadata;
+  agentEnabled?: boolean;
+  agentType?: string;
 }
 
 export interface TaskMetadata {

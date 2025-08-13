@@ -115,6 +115,16 @@ export async function PUT(
 
     const { taskId } = await params;
     const updates = await request.json();
+    
+    console.log('=== TASK UPDATE DEBUG ===');
+    console.log('Task ID:', taskId);
+    console.log('Updates received:', JSON.stringify(updates, null, 2));
+    console.log('Environment variables:', {
+      AI_AUTO_EXECUTE_ON_DRAG: process.env.AI_AUTO_EXECUTE_ON_DRAG,
+      MCP_MODE: process.env.MCP_MODE,
+      NODE_ENV: process.env.NODE_ENV
+    });
+    console.log('========================');
 
     // Verify user owns the task
     const existingTask = await prisma.task.findFirst({
@@ -216,18 +226,36 @@ export async function PUT(
     }
 
     // AI Agent Auto-Trigger: Check if status changed to "inProgress"
+    console.log('=== AI TRIGGER CHECK ===');
+    console.log('Filtered updates status:', filteredUpdates.status);
+    console.log('Existing task status:', existingTask.status);
+    console.log('AI auto execute on drag:', process.env.AI_AUTO_EXECUTE_ON_DRAG);
+    console.log('Condition check:', {
+      statusIsInProgress: filteredUpdates.status === 'inProgress',
+      statusChanged: existingTask.status !== 'inProgress',
+      aiEnabled: process.env.AI_AUTO_EXECUTE_ON_DRAG !== 'false',
+      willTrigger: filteredUpdates.status === 'inProgress' && 
+                   existingTask.status !== 'inProgress' &&
+                   process.env.AI_AUTO_EXECUTE_ON_DRAG !== 'false'
+    });
+    console.log('========================');
+    
     let aiExecutionTriggered = false;
     if (filteredUpdates.status === 'inProgress' && 
         existingTask.status !== 'inProgress' &&
         process.env.AI_AUTO_EXECUTE_ON_DRAG !== 'false') {
       
       try {
+        console.log('>>> AI AGENT TRIGGERING <<<');
+        console.log('Starting AI agent for task:', updatedTask.title);
+        
         // Dynamic import to avoid circular dependencies
         const { AIAgentService, AgentType } = await import('@/lib/services/aiAgentService');
         const aiService = new AIAgentService();
         
         // Determine agent type based on task content
         const agentType = determineAgentType(updatedTask.title, updatedTask.description || '');
+        console.log('Determined agent type:', agentType);
         
         // Enable AI for this task and execute
         await prisma.task.update({
@@ -238,8 +266,10 @@ export async function PUT(
             startedAt: new Date()
           }
         });
+        console.log('Task AI settings updated');
 
         // Execute AI agent
+        console.log('Calling AI service executeTask...');
         await aiService.executeTask(taskId, agentType, {
           projectPath: process.cwd(),
           autoTrigger: true,
@@ -247,6 +277,7 @@ export async function PUT(
         });
 
         aiExecutionTriggered = true;
+        console.log('AI agent execution initiated successfully');
 
         // Log AI execution trigger
         await prisma.activity.create({

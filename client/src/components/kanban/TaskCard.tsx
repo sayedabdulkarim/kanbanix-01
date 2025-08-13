@@ -2,19 +2,23 @@
 
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { MoreVertical, Clock, AlertCircle, CheckCircle, Edit2, Trash2 } from 'lucide-react';
+import { MoreVertical, Clock, AlertCircle, CheckCircle, Edit2, Trash2, Bot, Loader2 } from 'lucide-react';
 import { Task } from '@/types/project';
 import { cn } from '@/lib/utils/cn';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { useState, useEffect } from 'react';
 
 interface TaskCardProps {
   task: Task;
   onEdit?: (task: Task) => void;
   onDelete?: (taskId: string) => void;
   onClick?: (task: Task) => void;
+  onViewExecution?: (task: Task) => void;
 }
 
-export default function TaskCard({ task, onEdit, onDelete, onClick }: TaskCardProps) {
+export default function TaskCard({ task, onEdit, onDelete, onClick, onViewExecution }: TaskCardProps) {
+  const [executionStatus, setExecutionStatus] = useState<string | null>(null);
+  
   const {
     attributes,
     listeners,
@@ -27,6 +31,25 @@ export default function TaskCard({ task, onEdit, onDelete, onClick }: TaskCardPr
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
+  };
+
+  // Check for AI execution status
+  useEffect(() => {
+    if (task.agentEnabled && task.status === 'inProgress') {
+      fetchExecutionStatus();
+    }
+  }, [task.id, task.status, task.agentEnabled]);
+
+  const fetchExecutionStatus = async () => {
+    try {
+      const response = await fetch(`/api/tasks/${task.id}/execution`);
+      if (response.ok) {
+        const data = await response.json();
+        setExecutionStatus(data.status);
+      }
+    } catch (error) {
+      console.error('Error fetching execution status:', error);
+    }
   };
 
   const getPriorityColor = (priority?: string) => {
@@ -125,6 +148,29 @@ export default function TaskCard({ task, onEdit, onDelete, onClick }: TaskCardPr
               {getPriorityIcon(task.priority)}
               <span className="text-xs capitalize">{task.priority}</span>
             </div>
+          )}
+          
+          {/* AI Execution Indicator */}
+          {task.agentEnabled && executionStatus && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onViewExecution?.(task);
+              }}
+              className={cn(
+                "flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-colors",
+                executionStatus === 'running' && "bg-blue-500/20 text-blue-500 animate-pulse",
+                executionStatus === 'success' && "bg-green-500/20 text-green-500",
+                executionStatus === 'failed' && "bg-red-500/20 text-red-500"
+              )}
+            >
+              {executionStatus === 'running' ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Bot className="h-3 w-3" />
+              )}
+              <span className="capitalize">{executionStatus === 'running' ? 'AI Running' : 'AI Complete'}</span>
+            </button>
           )}
         </div>
 

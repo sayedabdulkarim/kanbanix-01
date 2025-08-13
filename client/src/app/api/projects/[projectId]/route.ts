@@ -96,6 +96,8 @@ export async function GET(
         dueDate: task.dueDate,
         timeEstimate: task.timeEstimate,
         timeSpent: task.timeSpent,
+        agentEnabled: task.agentEnabled,
+        agentType: task.agentType,
         assignee: task.assignee ? {
           id: task.assignee.id,
           name: task.assignee.name,

@@ -314,44 +314,39 @@ export class AIAgentService {
   // Call MCP Tool (either local or API)
   private async callMCPTool(toolName: string, params: any): Promise<any> {
     if (this.mcpMode === 'desktop') {
-      // Call local MCP server via stdio
-      const { spawn } = require('child_process');
-      
-      return new Promise((resolve, reject) => {
-        const mcpProcess = spawn('node', [
-          '../mcp-server/src/index.js'
-        ], {
-          stdio: ['pipe', 'pipe', 'pipe']
+      // For desktop mode, make HTTP call to our API which will handle MCP
+      try {
+        // Get the base URL for the API
+        const baseUrl = process.env.NEXT_PUBLIC_URL || 
+                        process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 
+                        'http://localhost:3000';
+        
+        const response = await fetch(`${baseUrl}/api/mcp/execute`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-internal-key': 'kanbanix-internal-mcp-call'
+          },
+          body: JSON.stringify({
+            tool: toolName,
+            params: params
+          })
         });
 
-        const request = {
-          method: 'tools/call',
-          params: {
-            name: toolName,
-            arguments: params
-          }
+        if (!response.ok) {
+          throw new Error(`MCP execution failed: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        return result;
+      } catch (error) {
+        console.error('MCP tool call error:', error);
+        return { 
+          success: false,
+          changes: [],
+          message: error.message 
         };
-
-        mcpProcess.stdin.write(JSON.stringify(request) + '\n');
-        mcpProcess.stdin.end();
-
-        let output = '';
-        mcpProcess.stdout.on('data', (data) => {
-          output += data.toString();
-        });
-
-        mcpProcess.on('close', (code) => {
-          if (code === 0) {
-            try {
-              resolve(JSON.parse(output));
-            } catch (e) {
-              resolve({ changes: [] });
-            }
-          } else {
-            reject(new Error(`MCP process failed with code ${code}`));
-          }
-        });
-      });
+      }
     } else {
       // Call Claude API with MCP tools
       // This will be implemented when we add API mode
@@ -389,6 +384,13 @@ export class AIAgentService {
       }
     });
 
+    // Emit WebSocket update
+    this.emitSocketUpdate(executionId, {
+      status: 'running',
+      progress,
+      currentStep
+    });
+
     // Add log entry
     await this.addExecutionLog(executionId, 'info', currentStep);
   }
@@ -399,7 +401,7 @@ export class AIAgentService {
     message: string,
     metadata?: any
   ): Promise<void> {
-    await this.prisma.agentLog.create({
+    const log = await this.prisma.agentLog.create({
       data: {
         executionId,
         level,
@@ -407,6 +409,44 @@ export class AIAgentService {
         metadata: metadata ? JSON.stringify(metadata) : null
       }
     });
+    
+    // Emit WebSocket log update
+    this.emitSocketLog(executionId, {
+      id: log.id,
+      level,
+      message,
+      data: metadata,
+      timestamp: log.timestamp
+    });
+  }
+  
+  // Emit WebSocket updates
+  private emitSocketUpdate(executionId: string, data: any): void {
+    try {
+      // Try to use global io if available (from server.js)
+      if ((global as any).io) {
+        (global as any).io.to(`execution-${executionId}`).emit('execution-update', {
+          executionId,
+          ...data,
+          timestamp: new Date()
+        });
+      }
+    } catch (error) {
+      console.error('Error emitting socket update:', error);
+    }
+  }
+  
+  private emitSocketLog(executionId: string, log: any): void {
+    try {
+      if ((global as any).io) {
+        (global as any).io.to(`execution-${executionId}`).emit('execution-log', {
+          executionId,
+          log
+        });
+      }
+    } catch (error) {
+      console.error('Error emitting socket log:', error);
+    }
   }
 
   private extractRequirements(description: string): string[] {

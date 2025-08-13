@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { getBoilerplateFiles, detectFramework } from '../templates/boilerplate-templates.js';
 
 const PROJECT_ROOT = path.resolve(process.cwd(), '..');
 
@@ -106,6 +107,104 @@ export const projectTools = [
   },
 
   {
+    name: 'generate_task_code',
+    description: 'Generate code implementation for a task',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_title: {
+          type: 'string',
+          description: 'Task title',
+        },
+        task_description: {
+          type: 'string',
+          description: 'Task description',
+        },
+        context: {
+          type: 'object',
+          description: 'Task context including project path',
+        },
+      },
+      required: ['task_title'],
+    },
+    handler: async ({ task_title, task_description, context }) => {
+      const changes = [];
+      
+      try {
+        // Detect which framework to use
+        const framework = detectFramework(task_title, task_description);
+        
+        if (!framework) {
+          return JSON.stringify({
+            success: false,
+            summary: `Could not determine framework from: "${task_title}"`,
+            changes: [],
+            message: 'Please specify: Next.js, React, or Vite in your task description'
+          }, null, 2);
+        }
+        
+        // Get boilerplate files for the detected framework
+        const boilerplateFiles = getBoilerplateFiles(framework);
+        const projectPath = context?.projectPath || PROJECT_ROOT;
+        const projectName = context?.projectName || `${framework}-app`;
+        const projectDir = path.join(projectPath, projectName);
+        
+        console.log(`Creating ${framework} boilerplate in: ${projectDir}`);
+        
+        // Create project directory
+        await fs.mkdir(projectDir, { recursive: true });
+        
+        // Write all boilerplate files
+        for (const [filePath, content] of Object.entries(boilerplateFiles)) {
+          const fullPath = path.join(projectDir, filePath);
+          const dir = path.dirname(fullPath);
+          
+          // Create directory if it doesn't exist
+          await fs.mkdir(dir, { recursive: true });
+          
+          // Write file
+          await fs.writeFile(fullPath, content);
+          
+          changes.push({
+            path: path.join(projectName, filePath),
+            type: 'created',
+            diff: { 
+              added: content.split('\n').length, 
+              removed: 0, 
+              hunks: [] 
+            }
+          });
+          
+          console.log(`Created: ${filePath}`);
+        }
+        
+        return JSON.stringify({
+          success: true,
+          summary: `${framework === 'nextjs' ? 'Next.js' : framework === 'vite' ? 'Vite React' : 'React'} boilerplate created successfully`,
+          changes,
+          message: `Created ${Object.keys(boilerplateFiles).length} files in ${projectName} directory`,
+          projectPath: projectDir,
+          framework: framework,
+          nextSteps: [
+            `cd ${projectName}`,
+            'npm install',
+            framework === 'nextjs' ? 'npm run dev' : framework === 'vite' ? 'npm run dev' : 'npm start'
+          ]
+        }, null, 2);
+        
+      } catch (error) {
+        console.error('Error generating code:', error);
+        return JSON.stringify({
+          success: false,
+          summary: 'Error generating code',
+          changes: [],
+          message: error.message
+        }, null, 2);
+      }
+    },
+  },
+
+  {
     name: 'suggest_tasks',
     description: 'Suggest tasks based on code analysis',
     inputSchema: {
@@ -124,6 +223,7 @@ export const projectTools = [
       // Check for TODOs in code
       if (analyze_todos) {
         try {
+          const { glob } = await import('glob');
           const files = await glob('**/*.{js,jsx,ts,tsx}', {
             cwd: PROJECT_ROOT,
             ignore: ['**/node_modules/**', '**/dist/**', '**/build/**'],

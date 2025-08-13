@@ -131,6 +131,30 @@ export default function ProjectBoard() {
 
   const moveTask = async (taskId: string, newColumnId: string, newOrder: number) => {
     try {
+      // Find the task to get its current status
+      const task = tasks.find(t => t.id === taskId);
+      if (!task) return;
+      
+      // Find the new column to determine status
+      const newColumn = project?.columns.find(col => col.id === newColumnId);
+      let newStatus = task.status;
+      
+      // Map column name to status
+      if (newColumn) {
+        const columnNameLower = newColumn.name.toLowerCase();
+        if (columnNameLower.includes('backlog')) {
+          newStatus = 'backlog';
+        } else if (columnNameLower.includes('to do') || columnNameLower === 'todo') {
+          newStatus = 'todo';
+        } else if (columnNameLower.includes('in progress') || columnNameLower === 'in progress') {
+          newStatus = 'inProgress';
+        } else if (columnNameLower.includes('in review') || columnNameLower === 'review') {
+          newStatus = 'inReview';
+        } else if (columnNameLower.includes('done') || columnNameLower === 'completed') {
+          newStatus = 'done';
+        }
+      }
+      
       const response = await fetch(`/api/tasks/${taskId}`, {
         method: 'PUT',
         headers: {
@@ -138,6 +162,7 @@ export default function ProjectBoard() {
         },
         body: JSON.stringify({
           columnId: newColumnId,
+          status: newStatus,
           order: newOrder,
         }),
       });
@@ -148,7 +173,7 @@ export default function ProjectBoard() {
 
       const updatedTask = await response.json();
       setTasks(prevTasks =>
-        prevTasks.map(t => t.id === taskId ? updatedTask : t)
+        prevTasks.map(t => t.id === taskId ? { ...updatedTask, status: newStatus } : t)
       );
     } catch (error) {
       console.error('Error moving task:', error);
@@ -220,11 +245,50 @@ export default function ProjectBoard() {
     else if (project.columns.some(col => col.id === over.id)) {
       const newColumnId = over.id as string;
       if (activeTask.columnId !== newColumnId) {
-        // TODO: Update task column in database
+        // Find the new column to determine status
+        const newColumn = project.columns.find(col => col.id === newColumnId);
+        let newStatus = activeTask.status;
+        
+        // Map column name to status
+        if (newColumn) {
+          const columnNameLower = newColumn.name.toLowerCase();
+          if (columnNameLower.includes('backlog')) {
+            newStatus = 'backlog';
+          } else if (columnNameLower.includes('to do') || columnNameLower === 'todo') {
+            newStatus = 'todo';
+          } else if (columnNameLower.includes('in progress') || columnNameLower === 'in progress') {
+            newStatus = 'inProgress';
+          } else if (columnNameLower.includes('in review') || columnNameLower === 'review') {
+            newStatus = 'inReview';
+          } else if (columnNameLower.includes('done') || columnNameLower === 'completed') {
+            newStatus = 'done';
+          }
+        }
+        
+        // Update task in database with new column AND status
+        fetch(`/api/tasks/${activeTask.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ 
+            columnId: newColumnId,
+            status: newStatus,
+            order: 0 
+          }),
+        }).then(response => {
+          if (!response.ok) {
+            console.error('Failed to update task');
+          }
+        }).catch(error => {
+          console.error('Error updating task:', error);
+        });
+        
+        // Update local state
         setTasks(prevTasks => 
           prevTasks.map(t => 
             t.id === activeTask.id 
-              ? { ...t, columnId: newColumnId, order: 0 }
+              ? { ...t, columnId: newColumnId, status: newStatus, order: 0 }
               : t
           )
         );
