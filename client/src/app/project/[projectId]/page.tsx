@@ -29,7 +29,7 @@ import BoardColumn from '@/components/kanban/BoardColumn';
 import TaskCard from '@/components/kanban/TaskCard';
 import TaskModal from '@/components/kanban/TaskModal';
 import TaskDetailsSplitView from '@/components/kanban/TaskDetailsSplitView';
-import AgentExecutionPanel from '@/components/kanban/AgentExecutionPanel';
+import TaskExecutionPanel from '@/components/kanban/TaskExecutionPanel';
 
 interface ProjectData {
   id: string;
@@ -672,19 +672,30 @@ export default function ProjectBoard() {
 
         {selectedTaskForDetails && (
           <div className="w-1/2 h-full border-l border-border overflow-hidden">
-            <TaskDetailsSplitView
-              task={selectedTaskForDetails}
-              onClose={() => setSelectedTaskForDetails(null)}
-              onUpdateTask={handleUpdateTaskFromDetails}
-              onDeleteTask={handleDeleteTask}
-            />
+            {selectedTaskForDetails.status === 'inReview' || taskExecutions[selectedTaskForDetails.id] ? (
+              <TaskExecutionPanel
+                task={selectedTaskForDetails}
+                projectId={params.projectId as string}
+                repoUrl={project.repoUrl}
+                onClose={() => setSelectedTaskForDetails(null)}
+              />
+            ) : (
+              <TaskDetailsSplitView
+                task={selectedTaskForDetails}
+                onClose={() => setSelectedTaskForDetails(null)}
+                onUpdateTask={handleUpdateTaskFromDetails}
+                onDeleteTask={handleDeleteTask}
+              />
+            )}
           </div>
         )}
         
         {executingTaskId && !selectedTaskForDetails && (
           <div className="w-1/3 h-full border-l border-border overflow-hidden">
-            <AgentExecutionPanel
-              taskId={executingTaskId}
+            <TaskExecutionPanel
+              task={tasks.find(t => t.id === executingTaskId)}
+              projectId={params.projectId as string}
+              repoUrl={project.repoUrl}
               onClose={() => setExecutingTaskId(null)}
             />
           </div>

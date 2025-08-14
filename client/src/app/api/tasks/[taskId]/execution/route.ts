@@ -61,6 +61,13 @@ export async function GET(
       }
     }
     
+    // Ensure changes is an array
+    if (!Array.isArray(changes)) {
+      changes = [];
+    }
+    
+    console.log('Execution API - changes count:', changes.length);
+    
     // Parse metadata in logs
     const parsedLogs = execution.logs.map((log: any) => ({
       id: log.id,

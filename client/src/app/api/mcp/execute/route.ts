@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
     // Add workspace path to params if projectId is provided
     let enhancedParams = { ...params };
     if (params.projectId) {
-      enhancedParams.workspacePath = `/tmp/workspace/${params.projectId}`;
+      enhancedParams.workspacePath = params.workspacePath || path.join(process.cwd(), 'projects', params.projectId);
     }
 
     // Execute MCP tool via stdio
@@ -57,6 +57,28 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
     const mcpServerPath = path.resolve(process.cwd(), '..', 'mcp-server', 'src', 'index.js');
     
     console.log('Executing MCP tool:', toolName, 'at path:', mcpServerPath);
+    
+    // Track files for change detection
+    const fs = require('fs');
+    const workspacePath = params.workspacePath || path.join(process.cwd(), 'projects', params.projectId);
+    let beforeFiles: Set<string> = new Set();
+    
+    // Get list of files before execution
+    if (fs.existsSync(workspacePath)) {
+      const getAllFiles = (dir: string, fileList: string[] = []): string[] => {
+        const files = fs.readdirSync(dir);
+        files.forEach((file: string) => {
+          const filePath = path.join(dir, file);
+          if (fs.statSync(filePath).isDirectory() && !file.startsWith('.') && file !== 'node_modules') {
+            getAllFiles(filePath, fileList);
+          } else if (!file.startsWith('.')) {
+            fileList.push(path.relative(workspacePath, filePath));
+          }
+        });
+        return fileList;
+      };
+      beforeFiles = new Set(getAllFiles(workspacePath));
+    }
     
     // Spawn MCP server process
     const mcpProcess = spawn('node', [mcpServerPath], {
@@ -90,15 +112,66 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
               const text = match[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
               try {
                 const result = JSON.parse(text);
+                
+                // Use changes from the result if provided, otherwise detect
+                let changes = result.changes || [];
+                
+                // If no changes in result, detect file changes
+                if (!changes.length && fs.existsSync(workspacePath)) {
+                  const getAllFiles = (dir: string, fileList: string[] = []): string[] => {
+                    const files = fs.readdirSync(dir);
+                    files.forEach((file: string) => {
+                      const filePath = path.join(dir, file);
+                      if (fs.statSync(filePath).isDirectory() && !file.startsWith('.') && file !== 'node_modules') {
+                        getAllFiles(filePath, fileList);
+                      } else if (!file.startsWith('.')) {
+                        fileList.push(path.relative(workspacePath, filePath));
+                      }
+                    });
+                    return fileList;
+                  };
+                  const afterFiles = new Set(getAllFiles(workspacePath));
+                  
+                  afterFiles.forEach((file: string) => {
+                    if (!beforeFiles.has(file)) {
+                      changes.push({ path: file, type: 'created' });
+                    }
+                  });
+                }
+                
                 responseReceived = true;
-                resolve(result);
+                resolve({ ...result, changes });
               } catch (e) {
-                // If not JSON, return as is
+                // If not JSON, detect file changes and return
+                const changes: any[] = [];
+                if (fs.existsSync(workspacePath)) {
+                  const getAllFiles = (dir: string, fileList: string[] = []): string[] => {
+                    const files = fs.readdirSync(dir);
+                    files.forEach((file: string) => {
+                      const filePath = path.join(dir, file);
+                      if (fs.statSync(filePath).isDirectory() && !file.startsWith('.') && file !== 'node_modules') {
+                        getAllFiles(filePath, fileList);
+                      } else if (!file.startsWith('.')) {
+                        fileList.push(path.relative(workspacePath, filePath));
+                      }
+                    });
+                    return fileList;
+                  };
+                  const afterFiles = new Set(getAllFiles(workspacePath));
+                  
+                  afterFiles.forEach((file: string) => {
+                    if (!beforeFiles.has(file)) {
+                      changes.push({ path: file, type: 'created' });
+                    }
+                  });
+                }
+                
                 responseReceived = true;
                 resolve({ 
                   success: true, 
                   message: text,
-                  changes: []
+                  summary: `Generated code for task`,
+                  changes
                 });
               }
             }
@@ -142,19 +215,52 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
       clearTimeout(timeout);
       
       if (!responseReceived) {
-        if (code === 0 && output) {
-          // Try to parse any output we got
-          try {
-            const result = JSON.parse(output);
-            resolve(result);
-          } catch (e) {
-            resolve({
-              success: false,
-              message: 'MCP tool completed but output was not valid JSON',
-              rawOutput: output,
-              changes: []
+        // Detect file changes after execution
+        const changes: any[] = [];
+        if (fs.existsSync(workspacePath)) {
+          const getAllFiles = (dir: string, fileList: string[] = []): string[] => {
+            const files = fs.readdirSync(dir);
+            files.forEach((file: string) => {
+              const filePath = path.join(dir, file);
+              if (fs.statSync(filePath).isDirectory() && !file.startsWith('.') && file !== 'node_modules') {
+                getAllFiles(filePath, fileList);
+              } else if (!file.startsWith('.')) {
+                fileList.push(path.relative(workspacePath, filePath));
+              }
             });
-          }
+            return fileList;
+          };
+          const afterFiles = new Set(getAllFiles(workspacePath));
+          
+          // Find new and modified files
+          afterFiles.forEach((file: string) => {
+            if (!beforeFiles.has(file)) {
+              changes.push({
+                path: file,
+                type: 'created'
+              });
+            }
+          });
+          
+          // Find deleted files
+          beforeFiles.forEach((file: string) => {
+            if (!afterFiles.has(file)) {
+              changes.push({
+                path: file,
+                type: 'deleted'
+              });
+            }
+          });
+        }
+        
+        if (code === 0) {
+          // Success - return with detected changes
+          resolve({
+            success: true,
+            message: output || 'Code generated successfully',
+            summary: `Generated code for task`,
+            changes: changes
+          });
         } else if (errorOutput) {
           reject(new Error(`MCP process error: ${errorOutput}`));
         } else {

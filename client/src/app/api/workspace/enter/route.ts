@@ -7,6 +7,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
+import gitService from '@/lib/services/gitService';
 
 const execAsync = promisify(exec);
 const prisma = new PrismaClient();
@@ -26,8 +27,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Get project ID from request
-    const { projectId } = await request.json();
+    // Get project ID and optional task info from request
+    const { projectId, taskId, taskTitle } = await request.json();
     if (!projectId) {
       return NextResponse.json({ error: 'Project ID required' }, { status: 400 });
     }
@@ -86,7 +87,29 @@ export async function POST(request: NextRequest) {
       } catch (gitError) {
         // Not a valid git repo or corrupted, remove and re-clone
         console.log('Invalid or corrupted git repo, removing and re-cloning');
-        await fs.rm(workspacePath, { recursive: true, force: true });
+        
+        // Use system command for more reliable removal
+        try {
+          if (process.platform === 'win32') {
+            await execAsync(`rmdir /s /q "${workspacePath}"`);
+          } else {
+            // Use rm -rf for Unix-like systems
+            await execAsync(`rm -rf "${workspacePath}"`);
+          }
+          console.log('Successfully removed corrupted workspace');
+        } catch (rmError) {
+          console.error('System rm failed, trying fs.rm:', rmError);
+          // Fallback to Node.js fs.rm
+          try {
+            await fs.rm(workspacePath, { recursive: true, force: true, maxRetries: 3 });
+          } catch (fsError) {
+            console.error('fs.rm also failed:', fsError);
+            // Last resort: rename the directory
+            const backupPath = `${workspacePath}_backup_${Date.now()}`;
+            await fs.rename(workspacePath, backupPath);
+            console.log(`Renamed problematic directory to ${backupPath}`);
+          }
+        }
       }
     } catch (error) {
       // Workspace doesn't exist, proceed to clone
@@ -175,6 +198,21 @@ export async function POST(request: NextRequest) {
       console.warn('Git config warning:', configError);
     }
 
+    // Create task branch if task info provided
+    let branchName = 'main';
+    if (taskId && taskTitle) {
+      try {
+        branchName = await gitService.createTaskBranch(workspacePath, taskId, taskTitle);
+        console.log(`Created/checked out task branch: ${branchName}`);
+      } catch (branchError) {
+        console.error('Error creating task branch:', branchError);
+        // Continue on main branch if branch creation fails
+      }
+    }
+
+    // Get current branch info
+    const branchInfo = await gitService.getBranchInfo(workspacePath);
+
     // Store workspace info in session/cache (you might want to use Redis or similar)
     // For now, we'll return the path and let the client manage it
 
@@ -188,6 +226,11 @@ export async function POST(request: NextRequest) {
         githubOwner: project.githubOwner,
         githubRepo: project.githubRepo,
         defaultBranch: 'main'
+      },
+      git: {
+        branch: branchInfo.current,
+        branches: branchInfo.all,
+        hasUncommittedChanges: branchInfo.hasUncommittedChanges
       }
     });
 

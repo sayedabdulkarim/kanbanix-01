@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { X, Terminal, CheckCircle, XCircle, Loader2, Clock, FileCode } from 'lucide-react';
+import { X, Terminal, CheckCircle, XCircle, Loader2, Clock, FileCode, GitCommit, GitBranch, GitPullRequest, ExternalLink } from 'lucide-react';
 import { format } from 'date-fns';
 import { useExecutionSocket } from '@/lib/socket/useSocket';
+import DiffViewer from './DiffViewer';
 
 interface AgentExecution {
   id: string;
@@ -32,13 +33,21 @@ interface AgentLog {
 
 interface AgentExecutionPanelProps {
   taskId: string;
+  projectId?: string;
   onClose: () => void;
+  repoUrl?: string;
 }
 
-export default function AgentExecutionPanel({ taskId, onClose }: AgentExecutionPanelProps) {
+export default function AgentExecutionPanel({ taskId, projectId, onClose, repoUrl }: AgentExecutionPanelProps) {
   const [execution, setExecution] = useState<AgentExecution | null>(null);
   const [loading, setLoading] = useState(true);
   const [executionId, setExecutionId] = useState<string | null>(null);
+  const [showCommitDialog, setShowCommitDialog] = useState(false);
+  const [commitMessage, setCommitMessage] = useState('');
+  const [committing, setCommitting] = useState(false);
+  const [branchInfo, setBranchInfo] = useState<any>(null);
+  const [showDiff, setShowDiff] = useState(true);
+  const [pushAfterCommit, setPushAfterCommit] = useState(true);
   
   // Use WebSocket for real-time updates
   const { execution: socketExecution, logs: socketLogs } = useExecutionSocket(executionId);
@@ -56,6 +65,13 @@ export default function AgentExecutionPanel({ taskId, onClose }: AgentExecutionP
     
     return () => clearInterval(interval);
   }, [taskId, execution?.status]);
+  
+  // Fetch branch info when execution completes
+  useEffect(() => {
+    if (execution?.status === 'completed' && projectId) {
+      fetchBranchInfo();
+    }
+  }, [execution?.status, projectId]);
 
   // Update execution from WebSocket
   useEffect(() => {
@@ -81,6 +97,19 @@ export default function AgentExecutionPanel({ taskId, onClose }: AgentExecutionP
       console.error('Error fetching execution:', error);
     } finally {
       setLoading(false);
+    }
+  };
+  
+  const fetchBranchInfo = async () => {
+    if (!projectId) return;
+    try {
+      const response = await fetch(`/api/workspace/status?projectId=${projectId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setBranchInfo(data.workspace?.git);
+      }
+    } catch (error) {
+      console.error('Error fetching branch info:', error);
     }
   };
 
@@ -112,6 +141,76 @@ export default function AgentExecutionPanel({ taskId, onClose }: AgentExecutionP
         return 'text-green-500';
       default:
         return 'text-gray-400';
+    }
+  };
+
+  const handleCommit = async () => {
+    if (!projectId || !commitMessage.trim()) return;
+    
+    setCommitting(true);
+    try {
+      // First commit
+      const commitResponse = await fetch('/api/workspace/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          taskId,
+          message: commitMessage
+        })
+      });
+      
+      if (commitResponse.ok) {
+        const commitResult = await commitResponse.json();
+        console.log('Commit successful:', commitResult);
+        
+        // Then push if requested
+        if (pushAfterCommit) {
+          const pushResponse = await fetch('/api/workspace/push', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              projectId,
+              branch: branchInfo?.branch
+            })
+          });
+          
+          if (pushResponse.ok) {
+            const pushResult = await pushResponse.json();
+            console.log('Push successful:', pushResult);
+          } else {
+            const pushError = await pushResponse.json();
+            console.error('Push failed:', pushError);
+          }
+        }
+        
+        setShowCommitDialog(false);
+        setCommitMessage('');
+        setPushAfterCommit(true);
+        
+        // Refresh branch info
+        fetchBranchInfo();
+      } else {
+        const error = await commitResponse.json();
+        console.error('Commit failed:', error);
+        // TODO: Show error toast
+      }
+    } catch (error) {
+      console.error('Commit error:', error);
+    } finally {
+      setCommitting(false);
+    }
+  };
+  
+  const handleCreatePR = () => {
+    if (repoUrl && branchInfo?.branch) {
+      // Extract owner and repo from URL
+      const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/\.]+)/);
+      if (match) {
+        const [, owner, repo] = match;
+        const prUrl = `https://github.com/${owner}/${repo}/compare/main...${branchInfo.branch}?expand=1`;
+        window.open(prUrl, '_blank');
+      }
     }
   };
 
@@ -163,6 +262,12 @@ export default function AgentExecutionPanel({ taskId, onClose }: AgentExecutionP
           <div className="flex items-center gap-2">
             {getStatusIcon(execution.status)}
             <span className="font-medium capitalize">{execution.status}</span>
+            {branchInfo?.branch && (
+              <span className="flex items-center gap-1 text-sm text-muted-foreground">
+                <GitBranch className="h-3 w-3" />
+                {branchInfo.branch}
+              </span>
+            )}
           </div>
           <div className="text-sm text-muted-foreground">
             Started: {format(new Date(execution.startedAt), 'HH:mm:ss')}
@@ -201,29 +306,50 @@ export default function AgentExecutionPanel({ taskId, onClose }: AgentExecutionP
         </div>
       )}
 
-      {/* Changes */}
-      {execution.changes && execution.changes.length > 0 && (
+      {/* Changes and Actions */}
+      {(execution.changes && execution.changes.length > 0) || execution.status === 'completed' ? (
         <div className="p-4 border-b">
-          <h4 className="font-medium mb-2 flex items-center gap-2">
-            <FileCode className="h-4 w-4" />
-            Changes ({execution.changes.length} files)
-          </h4>
-          <div className="space-y-2">
-            {execution.changes.map((change: any, index: number) => (
-              <div key={index} className="flex items-center justify-between text-sm p-2 bg-muted/50 rounded">
-                <span className="font-mono">{change.path}</span>
-                <span className={`px-2 py-1 rounded text-xs ${
-                  change.type === 'created' ? 'bg-green-500/20 text-green-500' :
-                  change.type === 'modified' ? 'bg-blue-500/20 text-blue-500' :
-                  'bg-red-500/20 text-red-500'
-                }`}>
-                  {change.type}
-                </span>
-              </div>
-            ))}
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-medium flex items-center gap-2">
+              <FileCode className="h-4 w-4" />
+              Changes {execution.changes?.length ? `(${execution.changes.length} files)` : ''}
+            </h4>
+            <div className="flex items-center gap-2">
+              {execution.status === 'completed' && projectId && (
+                <>
+                  <button
+                    onClick={() => {
+                      setCommitMessage(`feat: ${execution.summary || 'Generated code'}`);
+                      setShowCommitDialog(true);
+                    }}
+                    className="flex items-center gap-2 px-3 py-1 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90"
+                  >
+                    <GitCommit className="h-3 w-3" />
+                    Commit
+                  </button>
+                  {repoUrl && branchInfo?.branch && (
+                    <button
+                      onClick={handleCreatePR}
+                      className="flex items-center gap-2 px-3 py-1 text-sm border rounded hover:bg-secondary"
+                    >
+                      <GitPullRequest className="h-3 w-3" />
+                      Create PR
+                      <ExternalLink className="h-3 w-3" />
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
+          
+          {/* Diff Viewer */}
+          {showDiff && execution.changes && projectId && (
+            <div className="mt-4">
+              <DiffViewer projectId={projectId} changes={execution.changes} />
+            </div>
+          )}
         </div>
-      )}
+      ) : null}
 
       {/* Logs */}
       <div className="flex-1 overflow-auto p-4">
@@ -252,6 +378,69 @@ export default function AgentExecutionPanel({ taskId, onClose }: AgentExecutionP
         <div className="p-4 border-t bg-red-500/10">
           <h4 className="font-medium text-red-500 mb-2">Error</h4>
           <p className="text-sm font-mono">{execution.error}</p>
+        </div>
+      )}
+      
+      {/* Commit Dialog */}
+      {showCommitDialog && (
+        <div className="absolute inset-0 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-card rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+              <GitCommit className="h-5 w-5" />
+              Commit Changes
+            </h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-1 block">
+                  Commit Message
+                </label>
+                <textarea
+                  value={commitMessage}
+                  onChange={(e) => setCommitMessage(e.target.value)}
+                  className="w-full h-24 px-3 py-2 border rounded-md bg-background"
+                  placeholder="Describe your changes..."
+                />
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="pushAfterCommit"
+                  checked={pushAfterCommit}
+                  onChange={(e) => setPushAfterCommit(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                <label htmlFor="pushAfterCommit" className="text-sm">
+                  Push to remote after commit
+                </label>
+              </div>
+              
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setShowCommitDialog(false)}
+                  className="px-4 py-2 text-sm border rounded-md hover:bg-secondary"
+                  disabled={committing}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCommit}
+                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+                  disabled={committing || !commitMessage.trim()}
+                >
+                  {committing ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin inline mr-2" />
+                      {pushAfterCommit ? 'Committing & Pushing...' : 'Committing...'}
+                    </>
+                  ) : (
+                    pushAfterCommit ? 'Commit & Push' : 'Commit'
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

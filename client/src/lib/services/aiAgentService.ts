@@ -250,6 +250,17 @@ export class AIAgentService {
     
     const input = JSON.parse(execution.input);
     
+    await this.updateProgress(executionId, 20, 'Creating task branch');
+    
+    // Create task-specific branch in workspace
+    try {
+      // Skip branch creation for now - it's failing with auth issues
+      console.log('Skipping branch creation - auth issues need to be resolved');
+      await this.addExecutionLog(executionId, 'info', 'Working on main branch');
+    } catch (error) {
+      console.warn('Could not create task branch:', error);
+    }
+    
     await this.updateProgress(executionId, 30, 'Calling MCP server for code generation');
     
     // Call MCP server (or Claude API based on mode)
@@ -266,12 +277,16 @@ export class AIAgentService {
     // Log the generation
     await this.addExecutionLog(executionId, 'info', `Generated code for: ${input.title}`);
     
+    // Ensure changes are properly formatted
+    const changes = mcpResult.changes || [];
+    console.log('MCP Result changes:', changes.length, 'files');
+    
     // Final progress update
     await this.updateProgress(executionId, 100, 'Code generation completed');
     
     return {
       summary: mcpResult.summary || `Code generated successfully for task: ${input.title}`,
-      changes: mcpResult.changes || []
+      changes: changes
     };
   }
 
