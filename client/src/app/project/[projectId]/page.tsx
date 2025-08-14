@@ -29,6 +29,7 @@ import BoardColumn from '@/components/kanban/BoardColumn';
 import TaskCard from '@/components/kanban/TaskCard';
 import TaskModal from '@/components/kanban/TaskModal';
 import TaskDetailsSplitView from '@/components/kanban/TaskDetailsSplitView';
+import AgentExecutionPanel from '@/components/kanban/AgentExecutionPanel';
 
 interface ProjectData {
   id: string;
@@ -54,6 +55,8 @@ export default function ProjectBoard() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [selectedColumnId, setSelectedColumnId] = useState<string>('');
   const [selectedTaskForDetails, setSelectedTaskForDetails] = useState<Task | null>(null);
+  const [executingTaskId, setExecutingTaskId] = useState<string | null>(null);
+  const [taskExecutions, setTaskExecutions] = useState<Record<string, any>>({});
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -227,6 +230,28 @@ export default function ProjectBoard() {
     return tasks.filter(task => task.columnId === columnId).sort((a, b) => a.order - b.order);
   };
 
+  const pollExecutionStatus = async (taskId: string) => {
+    try {
+      const response = await fetch(`/api/tasks/${taskId}/execution`);
+      if (response.ok) {
+        const execution = await response.json();
+        setTaskExecutions(prev => ({ ...prev, [taskId]: execution }));
+        
+        // Continue polling if still running
+        if (execution && execution.status === 'running') {
+          setTimeout(() => pollExecutionStatus(taskId), 2000);
+        } else if (execution && (execution.status === 'completed' || execution.status === 'failed')) {
+          // Clear executing task when done
+          if (executingTaskId === taskId) {
+            setTimeout(() => setExecutingTaskId(null), 3000);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error polling execution status:', error);
+    }
+  };
+
   const moveTask = async (taskId: string, newColumnId: string, newOrder: number) => {
     try {
       // Find the task to get its current status
@@ -273,6 +298,12 @@ export default function ProjectBoard() {
       setTasks(prevTasks =>
         prevTasks.map(t => t.id === taskId ? { ...updatedTask, status: newStatus } : t)
       );
+      
+      // If task moved to "In Progress", track it as executing
+      if (newStatus === 'inProgress') {
+        setExecutingTaskId(taskId);
+        pollExecutionStatus(taskId);
+      }
     } catch (error) {
       console.error('Error moving task:', error);
     }
@@ -582,7 +613,11 @@ export default function ProjectBoard() {
       </div>
 
       <div className="flex h-[calc(100vh-8rem)]">
-        <div className={selectedTaskForDetails ? "w-1/2" : "w-full"}>
+        <div className={cn(
+          "transition-all duration-300",
+          selectedTaskForDetails ? "w-1/2" : 
+          executingTaskId ? "w-2/3" : "w-full"
+        )}>
           <div className="h-full overflow-x-auto overflow-y-hidden">
             <DndContext
               sensors={sensors}
@@ -607,6 +642,8 @@ export default function ProjectBoard() {
                       onEditTask={handleEditTask}
                       onDeleteTask={handleDeleteTask}
                       onTaskClick={handleTaskClick}
+                      taskExecutions={taskExecutions}
+                      executingTaskId={executingTaskId}
                     />
                   );
                 })}
@@ -640,6 +677,15 @@ export default function ProjectBoard() {
               onClose={() => setSelectedTaskForDetails(null)}
               onUpdateTask={handleUpdateTaskFromDetails}
               onDeleteTask={handleDeleteTask}
+            />
+          </div>
+        )}
+        
+        {executingTaskId && !selectedTaskForDetails && (
+          <div className="w-1/3 h-full border-l border-border overflow-hidden">
+            <AgentExecutionPanel
+              taskId={executingTaskId}
+              onClose={() => setExecutingTaskId(null)}
             />
           </div>
         )}

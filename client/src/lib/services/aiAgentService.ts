@@ -16,7 +16,7 @@ export enum AgentType {
 export enum AgentStatus {
   PENDING = 'pending',
   RUNNING = 'running', 
-  SUCCESS = 'success',
+  COMPLETED = 'completed',
   FAILED = 'failed',
   CANCELLED = 'cancelled'
 }
@@ -214,7 +214,7 @@ export class AIAgentService {
       }
 
       // Update with success
-      await this.updateExecutionStatus(executionId, AgentStatus.SUCCESS, {
+      await this.updateExecutionStatus(executionId, AgentStatus.COMPLETED, {
         completedAt: new Date(),
         progress: 100,
         currentStep: 'Completed',
@@ -266,8 +266,11 @@ export class AIAgentService {
     // Log the generation
     await this.addExecutionLog(executionId, 'info', `Generated code for: ${input.title}`);
     
+    // Final progress update
+    await this.updateProgress(executionId, 100, 'Code generation completed');
+    
     return {
-      summary: `Code generated successfully for task: ${input.title}`,
+      summary: mcpResult.summary || `Code generated successfully for task: ${input.title}`,
       changes: mcpResult.changes || []
     };
   }

@@ -14,9 +14,11 @@ interface TaskCardProps {
   onDelete?: (taskId: string) => void;
   onClick?: (task: Task) => void;
   onViewExecution?: (task: Task) => void;
+  isExecuting?: boolean;
+  execution?: any;
 }
 
-export default function TaskCard({ task, onEdit, onDelete, onClick, onViewExecution }: TaskCardProps) {
+export default function TaskCard({ task, onEdit, onDelete, onClick, onViewExecution, isExecuting, execution }: TaskCardProps) {
   const [executionStatus, setExecutionStatus] = useState<string | null>(null);
   
   const {
@@ -92,11 +94,38 @@ export default function TaskCard({ task, onEdit, onDelete, onClick, onViewExecut
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <h4 className="font-medium text-sm mb-1 truncate">{task.title}</h4>
+          <div className="flex items-center gap-2">
+            <h4 className="font-medium text-sm truncate">{task.title}</h4>
+            {(isExecuting || execution) && (
+              <div className="flex items-center gap-1">
+                {execution?.status === 'completed' ? (
+                  <CheckCircle className="h-3 w-3 text-green-500" />
+                ) : execution?.status === 'failed' ? (
+                  <AlertCircle className="h-3 w-3 text-red-500" />
+                ) : (
+                  <Loader2 className="h-3 w-3 animate-spin text-blue-500" />
+                )}
+              </div>
+            )}
+          </div>
           {task.description && (
-            <p className="text-xs text-muted-foreground line-clamp-2">
+            <p className="text-xs text-muted-foreground line-clamp-2 mt-1">
               {task.description}
             </p>
+          )}
+          {execution && execution.progress !== undefined && (
+            <div className="mt-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+                <span>Progress</span>
+                <span>{execution.progress}%</span>
+              </div>
+              <div className="h-1 bg-secondary rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-blue-500 transition-all duration-300"
+                  style={{ width: `${execution.progress}%` }}
+                />
+              </div>
+            </div>
           )}
         </div>
         

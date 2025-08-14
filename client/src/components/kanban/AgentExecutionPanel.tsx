@@ -46,7 +46,16 @@ export default function AgentExecutionPanel({ taskId, onClose }: AgentExecutionP
   // Initial fetch to get execution ID
   useEffect(() => {
     fetchInitialExecution();
-  }, [taskId]);
+    
+    // Poll for updates every 2 seconds if running
+    const interval = setInterval(() => {
+      if (execution && execution.status === 'running') {
+        fetchInitialExecution();
+      }
+    }, 2000);
+    
+    return () => clearInterval(interval);
+  }, [taskId, execution?.status]);
 
   // Update execution from WebSocket
   useEffect(() => {
@@ -79,6 +88,7 @@ export default function AgentExecutionPanel({ taskId, onClose }: AgentExecutionP
     switch (status) {
       case 'running':
         return <Loader2 className="h-5 w-5 animate-spin text-blue-500" />;
+      case 'completed':
       case 'success':
         return <CheckCircle className="h-5 w-5 text-green-500" />;
       case 'failed':
@@ -163,7 +173,7 @@ export default function AgentExecutionPanel({ taskId, onClose }: AgentExecutionP
         </div>
         
         {/* Progress Bar */}
-        {execution.status === 'running' && execution.progress !== undefined && (
+        {execution.progress !== undefined && (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs">
               <span className="text-muted-foreground">{execution.currentStep || 'Processing...'}</span>
@@ -171,7 +181,11 @@ export default function AgentExecutionPanel({ taskId, onClose }: AgentExecutionP
             </div>
             <div className="w-full bg-secondary rounded-full h-2 overflow-hidden">
               <div 
-                className="h-full bg-primary transition-all duration-500 ease-out"
+                className={`h-full transition-all duration-500 ease-out ${
+                  execution.status === 'completed' ? 'bg-green-500' : 
+                  execution.status === 'failed' ? 'bg-red-500' : 
+                  'bg-primary'
+                }`}
                 style={{ width: `${execution.progress}%` }}
               />
             </div>
