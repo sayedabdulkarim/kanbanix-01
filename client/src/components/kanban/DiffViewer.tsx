@@ -46,12 +46,23 @@ export default function DiffViewer({ projectId, changes = [], expandAll }: DiffV
   useEffect(() => {
     if (expandAll !== undefined) {
       if (expandAll) {
-        setExpandedFiles(new Set(diffs.map(d => d.path)));
+        // Expand all files from both changes and diffs
+        const allPaths = new Set([
+          ...changes.map(c => c.path),
+          ...diffs.map(d => d.path)
+        ]);
+        setExpandedFiles(allPaths);
+        // Fetch content for all created files
+        changes.filter(c => c.type === 'created').forEach(change => {
+          if (!fileContents[change.path]) {
+            fetchFileContent(change.path);
+          }
+        });
       } else {
         setExpandedFiles(new Set());
       }
     }
-  }, [expandAll, diffs]);
+  }, [expandAll, diffs, changes]);
 
   const fetchDiffs = async () => {
     try {

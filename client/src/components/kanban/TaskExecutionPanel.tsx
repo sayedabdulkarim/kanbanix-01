@@ -50,7 +50,7 @@ export default function TaskExecutionPanel({
 }: TaskExecutionPanelProps) {
   const [execution, setExecution] = useState<TaskExecution | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'logs' | 'diffs'>('diffs');
+  const [activeTab, setActiveTab] = useState<'logs' | 'diffs'>('logs');
   const [taskDetailsExpanded, setTaskDetailsExpanded] = useState(true);
   const [devServerExpanded, setDevServerExpanded] = useState(false);
   const [chatMessage, setChatMessage] = useState('');
@@ -111,10 +111,7 @@ export default function TaskExecutionPanel({
         const data = await response.json();
         console.log('Fetched execution with changes:', data.changes?.length || 0);
         setExecution(data);
-        // If completed, switch to diffs tab
-        if (data.status === 'completed' && data.changes && data.changes.length > 0) {
-          setActiveTab('diffs');
-        }
+        // Don't auto-switch tabs anymore to prevent re-renders
       }
     } catch (error) {
       console.error('Error fetching execution:', error);
@@ -197,16 +194,16 @@ export default function TaskExecutionPanel({
   };
 
   const formatTaskStatus = (status?: string) => {
-    // If execution is completed, task is still in progress but AI work is done
-    if (execution?.status === 'completed' && status === 'inProgress') {
-      return 'In Progress (AI Complete)';
-    }
-    
     switch (status) {
-      case 'inProgress': return 'In Progress';
+      case 'done': return 'Done';
+      case 'inProgress': 
+        // Show AI completion status if execution is done but task still in progress
+        if (execution?.status === 'completed') {
+          return 'In Progress (AI Complete)';
+        }
+        return 'In Progress';
       case 'inReview': return 'In Review';
       case 'todo': return 'To Do';
-      case 'done': return 'Done';
       case 'backlog': return 'Backlog';
       default: return status || 'To Do';
     }
@@ -236,8 +233,9 @@ export default function TaskExecutionPanel({
           <h2 className="text-lg font-semibold">{task?.title || 'Untitled Task'}</h2>
           <div className="flex items-center gap-2 mt-1">
             <span className={`text-sm font-medium ${
-              execution?.status === 'completed' ? 'text-green-500' :
+              task?.status === 'done' ? 'text-green-500' :
               task?.status === 'inReview' ? 'text-yellow-500' : 
+              task?.status === 'inProgress' && execution?.status === 'completed' ? 'text-green-500' :
               task?.status === 'inProgress' ? 'text-blue-500' : 
               getStatusColor(task?.status || 'todo')
             }`}>
@@ -386,9 +384,9 @@ export default function TaskExecutionPanel({
         </button>
       </div>
 
-      {/* Tab Content */}
+      {/* Tab Content - Using display instead of conditional rendering to prevent re-renders */}
       <div className="flex-1 overflow-auto">
-        {activeTab === 'logs' ? (
+        <div style={{ display: activeTab === 'logs' ? 'block' : 'none' }}>
           <div className="p-4 space-y-1 font-mono text-sm">
             {execution?.logs && execution.logs.length > 0 ? (
               execution.logs.map((log) => (
@@ -406,7 +404,8 @@ export default function TaskExecutionPanel({
               <p className="text-muted-foreground">No logs available</p>
             )}
           </div>
-        ) : (
+        </div>
+        <div style={{ display: activeTab === 'diffs' ? 'block' : 'none' }}>
           <div className="p-4">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-medium flex items-center gap-2">
@@ -456,7 +455,7 @@ export default function TaskExecutionPanel({
               />
             )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Chat Section */}
