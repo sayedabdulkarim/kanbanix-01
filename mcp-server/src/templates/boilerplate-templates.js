@@ -1,5 +1,9 @@
 /**
- * Boilerplate templates for different frameworks
+ * DEPRECATED: These hardcoded templates are no longer used
+ * We now use `npx create-next-app@latest` for all new projects
+ * Keeping this file for backward compatibility only
+ * 
+ * Old boilerplate templates for different frameworks
  * Adapted from SynthAI for Kanbanix MCP server
  */
 
@@ -213,43 +217,31 @@ next-env.d.ts`
   "name": "react-app",
   "version": "0.1.0",
   "private": true,
-  "dependencies": {
-    "@testing-library/jest-dom": "^5.17.0",
-    "@testing-library/react": "^13.4.0",
-    "@testing-library/user-event": "^13.5.0",
-    "@types/jest": "^27.5.2",
-    "@types/node": "^16.18.0",
-    "@types/react": "^18.2.0",
-    "@types/react-dom": "^18.2.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-scripts": "5.0.1",
-    "typescript": "^4.9.5",
-    "web-vitals": "^2.1.4"
-  },
+  "type": "module",
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "preview": "vite preview"
   },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
   },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@typescript-eslint/eslint-plugin": "^6.14.0",
+    "@typescript-eslint/parser": "^6.14.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "eslint": "^8.55.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.5",
+    "typescript": "^5.2.2",
+    "vite": "^5.0.8",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.3.6"
   }
 }`,
 
@@ -499,20 +491,20 @@ export function getBoilerplateFiles(framework) {
  * Detect framework from task description
  */
 export function detectFramework(taskTitle, taskDescription = '') {
+  // Always return Next.js as we're standardizing on it
+  // This function is kept for backward compatibility
+  // but always returns 'nextjs' for any new project request
   const combined = (taskTitle + ' ' + taskDescription).toLowerCase();
   
-  if (combined.includes('next') || combined.includes('nextjs')) {
-    return 'nextjs';
-  }
-  if (combined.includes('vite')) {
-    return 'vite';
-  }
-  if (combined.includes('react')) {
-    return 'react';
-  }
-  
-  // Default to Next.js for generic requests
-  if (combined.includes('boilerplate') || combined.includes('initialize')) {
+  // Check if this is a new project request
+  if (combined.includes('boilerplate') || 
+      combined.includes('new project') ||
+      combined.includes('initialize') ||
+      combined.includes('create app') ||
+      combined.includes('starter') ||
+      combined.includes('next') ||
+      combined.includes('react') ||
+      combined.includes('app')) {
     return 'nextjs';
   }
   

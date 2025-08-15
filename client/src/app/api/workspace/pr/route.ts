@@ -109,9 +109,11 @@ export async function POST(request: NextRequest) {
           where: {
             projectId,
             OR: [
-              { name: { contains: 'Review', mode: 'insensitive' } },
-              { name: { contains: 'review', mode: 'insensitive' } },
+              { name: { contains: 'Review' } },
+              { name: { contains: 'review' } },
               { name: 'In Review' },
+              { name: 'IN REVIEW' },
+              { name: 'in review' },
             ]
           }
         });

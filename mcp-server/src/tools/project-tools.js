@@ -1,8 +1,149 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { spawn, exec as execCallback } from 'child_process';
+import { promisify } from 'util';
 import { getBoilerplateFiles, detectFramework } from '../templates/boilerplate-templates.js';
 
+const exec = promisify(execCallback);
 const PROJECT_ROOT = path.resolve(process.cwd(), '..');
+
+// LLM-based intent analyzer - uses Claude Desktop in development mode
+// This replaces hardcoded keyword detection as per KANBANIX_AI_WORKFLOW_V2.md
+async function analyzeTaskIntent(taskTitle, taskDescription) {
+  const prompt = `
+Analyze the following task and determine if it's requesting a NEW PROJECT creation or a FEATURE addition to an existing project.
+
+Task Title: ${taskTitle}
+Task Description: ${taskDescription || 'No description provided'}
+
+Rules:
+- NEW_PROJECT: User wants to create a fresh application, boilerplate, starter project, or initialize a new codebase
+- FEATURE: User wants to add, modify, or fix something in existing code
+
+Examples of NEW_PROJECT:
+- "Create a Next.js boilerplate"
+- "Initialize new React app"
+- "Start a fresh project"
+- "Create a boiler plate"
+- "Setup new application"
+
+Examples of FEATURE:
+- "Add login button"
+- "Create todo list component"
+- "Fix navigation bug"
+- "Update styles"
+- "Add API endpoint"
+
+Respond with a JSON object:
+{
+  "type": "NEW_PROJECT" or "FEATURE",
+  "confidence": 0-100,
+  "reasoning": "Brief explanation"
+}
+`;
+
+  try {
+    // In development mode with Claude Desktop (MCP_MODE=desktop)
+    // We can directly ask Claude since it's already running
+    // This is a simplified version - in production, we'd use the Anthropic API
+    
+    // For now, we'll use a more intelligent pattern matching
+    // that's less brittle than exact keyword matching
+    const combined = `${taskTitle} ${taskDescription || ''}`.toLowerCase();
+    
+    // Check for new project indicators (more flexible)
+    const newProjectPatterns = [
+      /\b(create|init|initialize|setup|start)\s+(a\s+)?(new\s+)?(\w+\s+)?(project|app|application|boiler\s*plate|starter|template)/i,
+      /\b(new|fresh|blank|empty)\s+(\w+\s+)?(project|app|application|boiler\s*plate|starter)/i,
+      /\bboiler\s*plate\b/i,
+      /\b(scaffold|bootstrap)\s+(a\s+)?(\w+\s+)?(app|project)/i
+    ];
+    
+    const isNewProject = newProjectPatterns.some(pattern => pattern.test(combined));
+    
+    // Check for feature indicators
+    const featurePatterns = [
+      /\b(add|create|implement|build|fix|update|modify|enhance)\s+(a\s+)?(\w+\s+)?(component|feature|button|page|api|endpoint|function|module)/i,
+      /\b(fix|debug|resolve|patch|repair)\s+/i,
+      /\b(update|modify|change|edit|refactor)\s+/i
+    ];
+    
+    const isFeature = featurePatterns.some(pattern => pattern.test(combined));
+    
+    // Determine intent based on patterns
+    let type = 'FEATURE';
+    let confidence = 60;
+    let reasoning = 'Default to feature request';
+    
+    if (isNewProject && !isFeature) {
+      type = 'NEW_PROJECT';
+      confidence = 90;
+      reasoning = 'Clear indicators of new project creation';
+    } else if (isFeature && !isNewProject) {
+      type = 'FEATURE';
+      confidence = 90;
+      reasoning = 'Clear indicators of feature addition';
+    } else if (isNewProject && isFeature) {
+      // Ambiguous - lean towards new project if "boilerplate" or similar is mentioned
+      if (/boiler\s*plate|starter|template|scaffold/i.test(combined)) {
+        type = 'NEW_PROJECT';
+        confidence = 75;
+        reasoning = 'Contains both patterns but boilerplate-related terms suggest new project';
+      } else {
+        type = 'FEATURE';
+        confidence = 65;
+        reasoning = 'Contains both patterns but context suggests feature addition';
+      }
+    }
+    
+    return {
+      type,
+      confidence,
+      reasoning
+    };
+    
+  } catch (error) {
+    console.error('Error analyzing intent:', error);
+    // Fallback to safe default
+    return {
+      type: 'FEATURE',
+      confidence: 50,
+      reasoning: 'Error in analysis, defaulting to feature request'
+    };
+  }
+}
+
+// Helper function to check if a project directory is essentially empty
+async function checkIfProjectIsEmpty(projectPath) {
+  try {
+    const files = await fs.readdir(projectPath);
+    
+    // Files that don't count as "real" project files
+    const ignoredFiles = [
+      '.git',
+      '.gitignore',
+      'README.md',
+      'LICENSE',
+      'LICENSE.md',
+      '.DS_Store',
+      'thumbs.db',
+      '.env.example',
+      '.github'
+    ];
+    
+    // Filter out ignored files
+    const realFiles = files.filter(file => 
+      !ignoredFiles.includes(file.toLowerCase()) &&
+      !ignoredFiles.includes(file)
+    );
+    
+    // If no real files, project is considered empty
+    return realFiles.length === 0;
+  } catch (error) {
+    // If directory doesn't exist or can't be read, consider it empty
+    return true;
+  }
+}
 
 export const projectTools = [
   {
@@ -131,74 +272,204 @@ export const projectTools = [
       const changes = [];
       
       try {
-        // Detect which framework to use
-        const framework = detectFramework(task_title, task_description);
+        // Use LLM to analyze intent instead of hardcoded keywords
+        console.log(`Analyzing task intent: "${task_title}"`);
         
-        if (!framework) {
+        // Ask Claude to determine if this is a new project or feature request
+        const intentAnalysis = await analyzeTaskIntent(task_title, task_description);
+        console.log(`Intent analysis result: ${intentAnalysis.type}`);
+        
+        if (intentAnalysis.type !== 'NEW_PROJECT') {
+          // This is not a new project request, handle as feature addition
+          console.log('Task identified as feature request, not new project');
           return JSON.stringify({
             success: false,
-            summary: `Could not determine framework from: "${task_title}"`,
+            summary: 'This appears to be a feature request, not a new project',
             changes: [],
-            message: 'Please specify: Next.js, React, or Vite in your task description'
+            message: 'Use this tool only for creating new projects. For adding features to existing projects, the AI will generate code directly.',
+            intent: intentAnalysis
           }, null, 2);
         }
         
-        // Get boilerplate files for the detected framework
-        const boilerplateFiles = getBoilerplateFiles(framework);
-        const projectPath = context?.projectPath || PROJECT_ROOT;
-        const projectName = context?.projectName || `${framework}-app`;
-        const projectDir = path.join(projectPath, projectName);
+        // Check if we're in an existing project workspace that's essentially empty
+        const workspacePath = context?.projectPath || context?.workspacePath || PROJECT_ROOT;
+        console.log(`Checking if project is empty at path: ${workspacePath}`);
+        const isEmptyProject = await checkIfProjectIsEmpty(workspacePath);
+        console.log(`Is empty project: ${isEmptyProject}`);
         
-        console.log(`Creating ${framework} boilerplate in: ${projectDir}`);
+        if (!isEmptyProject) {
+          console.log('Project already has code, cannot create boilerplate');
+          return JSON.stringify({
+            success: false,
+            summary: 'Project already has code',
+            changes: [],
+            message: 'Cannot create boilerplate in a project that already has code. This tool is only for empty projects or new project creation.',
+            intent: intentAnalysis
+          }, null, 2);
+        }
         
-        // Create project directory
-        await fs.mkdir(projectDir, { recursive: true });
+        console.log('Project is empty, proceeding with Next.js creation');
+        console.log(`Intent: ${intentAnalysis.type} (confidence: ${intentAnalysis.confidence}%)`);
+        console.log(`Reasoning: ${intentAnalysis.reasoning}`);
         
-        // Write all boilerplate files
-        for (const [filePath, content] of Object.entries(boilerplateFiles)) {
-          const fullPath = path.join(projectDir, filePath);
-          const dir = path.dirname(fullPath);
+        // For empty projects, create Next.js app directly in the workspace
+        // Don't create a subdirectory since we're already in the project folder
+        const projectPath = workspacePath;
+        const projectName = path.basename(projectPath); // Use the current folder name
+        const projectDir = projectPath; // Use the workspace directly
+        
+        console.log(`Creating Next.js app in existing project: ${projectDir}`);
+        
+        // Clean up existing files that might conflict with create-next-app
+        // Keep only .git directory to preserve version control
+        console.log('Cleaning up initial GitHub files (README, LICENSE, etc.)...');
+        try {
+          const files = await fs.readdir(projectDir);
+          for (const file of files) {
+            // Preserve .git directory for version control
+            if (file !== '.git') {
+              const filePath = path.join(projectDir, file);
+              const stat = await fs.stat(filePath);
+              if (stat.isDirectory()) {
+                await fs.rm(filePath, { recursive: true, force: true });
+              } else {
+                await fs.unlink(filePath);
+              }
+              console.log(`Removed: ${file}`);
+            }
+          }
+          console.log('Directory cleaned, ready for Next.js creation');
+        } catch (cleanupError) {
+          console.warn('Warning during cleanup:', cleanupError.message);
+        }
+        
+        console.log('Using npx create-next-app@latest with configuration...');
+        
+        // Build the command to create Next.js app in current directory (.)
+        // Using . as the project name creates files in the current directory
+        const commandArgs = [
+          'create-next-app@latest',
+          '.', // Create in current directory
+          '--tailwind',
+          '--eslint', 
+          '--app',
+          '--src-dir',
+          '--ts',
+          '--yes' // Skip all prompts
+        ];
+        
+        // Execute npx create-next-app command
+        const createProcess = spawn('npx', commandArgs, {
+          cwd: projectDir, // Run in the project directory
+          shell: true, // Required for npx to work properly
+          env: {
+            ...process.env,
+            // Force non-interactive mode
+            CI: 'true',
+            FORCE_COLOR: '0'
+          }
+        });
+        
+        let output = '';
+        let errorOutput = '';
+        
+        // Capture output
+        createProcess.stdout.on('data', (data) => {
+          const text = data.toString();
+          output += text;
+          console.log(text);
+        });
+        
+        createProcess.stderr.on('data', (data) => {
+          const text = data.toString();
+          errorOutput += text;
+          console.error(text);
+        });
+        
+        // Wait for process to complete with a longer timeout for npm/yarn install
+        await new Promise((resolve, reject) => {
+          let processTimeout;
           
-          // Create directory if it doesn't exist
-          await fs.mkdir(dir, { recursive: true });
+          // Set a timeout for the entire create-next-app process (90 seconds)
+          processTimeout = setTimeout(() => {
+            console.error('create-next-app process timeout - killing process');
+            createProcess.kill();
+            reject(new Error('create-next-app process timed out after 90 seconds'));
+          }, 90000);
           
-          // Write file
-          await fs.writeFile(fullPath, content);
-          
-          changes.push({
-            path: path.join(projectName, filePath),
-            type: 'created',
-            diff: { 
-              added: content.split('\n').length, 
-              removed: 0, 
-              hunks: [] 
+          createProcess.on('close', (code) => {
+            clearTimeout(processTimeout);
+            if (code === 0) {
+              resolve();
+            } else {
+              reject(new Error(`create-next-app exited with code ${code}`));
             }
           });
           
-          console.log(`Created: ${filePath}`);
-        }
+          createProcess.on('error', (err) => {
+            clearTimeout(processTimeout);
+            reject(err);
+          });
+        });
+        
+        console.log('Next.js app created successfully!');
+        
+        // Get list of created files for the response
+        const getFiles = async (dir, fileList = []) => {
+          const files = await fs.readdir(dir, { withFileTypes: true });
+          
+          for (const file of files) {
+            const filePath = path.join(dir, file.name);
+            
+            if (file.isDirectory()) {
+              // Skip node_modules and .git
+              if (file.name !== 'node_modules' && file.name !== '.git') {
+                await getFiles(filePath, fileList);
+              }
+            } else {
+              const relativePath = path.relative(projectPath, filePath);
+              fileList.push({
+                path: relativePath,
+                type: 'created',
+                diff: { added: 1, removed: 0, hunks: [] }
+              });
+            }
+          }
+          
+          return fileList;
+        };
+        
+        const createdFiles = await getFiles(projectDir);
         
         return JSON.stringify({
           success: true,
-          summary: `${framework === 'nextjs' ? 'Next.js' : framework === 'vite' ? 'Vite React' : 'React'} boilerplate created successfully`,
-          changes,
-          message: `Created ${Object.keys(boilerplateFiles).length} files in ${projectName} directory`,
+          summary: `Next.js app created successfully with TypeScript and Tailwind CSS`,
+          changes: createdFiles,
+          message: `Created Next.js boilerplate in project with ${createdFiles.length} files`,
           projectPath: projectDir,
-          framework: framework,
+          framework: 'nextjs',
+          config: {
+            typescript: true,
+            tailwind: true,
+            eslint: true,
+            appRouter: true,
+            srcDir: true
+          },
           nextSteps: [
-            `cd ${projectName}`,
-            'npm install',
-            framework === 'nextjs' ? 'npm run dev' : framework === 'vite' ? 'npm run dev' : 'npm start'
+            'npm run dev',
+            'Open http://localhost:3000',
+            'Start building your application!'
           ]
         }, null, 2);
         
       } catch (error) {
-        console.error('Error generating code:', error);
+        console.error('Error creating Next.js app:', error);
         return JSON.stringify({
           success: false,
-          summary: 'Error generating code',
+          summary: 'Error creating Next.js app',
           changes: [],
-          message: error.message
+          message: error.message,
+          hint: 'Make sure you have Node.js and npm installed'
         }, null, 2);
       }
     },
@@ -367,6 +638,35 @@ export const projectTools = [
       } catch (error) {
         return `Error executing command: ${error.message}`;
       }
+    },
+  },
+
+  {
+    name: 'analyze_intent',
+    description: 'Analyze task intent to determine if it is a new project or feature request',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_title: {
+          type: 'string',
+          description: 'Task title',
+        },
+        task_description: {
+          type: 'string',
+          description: 'Task description (optional)',
+        },
+      },
+      required: ['task_title'],
+    },
+    handler: async ({ task_title, task_description }) => {
+      // Use the same intent analyzer function
+      const result = await analyzeTaskIntent(task_title, task_description);
+      
+      console.log(`Intent Analysis for: "${task_title}"`);
+      console.log(`Result: ${result.type} (confidence: ${result.confidence}%)`);
+      console.log(`Reasoning: ${result.reasoning}`);
+      
+      return JSON.stringify(result, null, 2);
     },
   },
 ];

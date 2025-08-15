@@ -17,6 +17,7 @@ import { codeTools } from './tools/code-tools.js';
 import { projectTools } from './tools/project-tools.js';
 import { apiTools } from './tools/api-tools.js';
 import { githubAwareTools } from './tools/github-aware-tools.js';
+import { testTools } from './tools/test-tools.js';
 
 // Combine all tools
 const allTools = [
@@ -26,6 +27,7 @@ const allTools = [
   ...projectTools,
   ...apiTools,
   ...githubAwareTools,
+  ...testTools,
 ];
 
 // Create server instance

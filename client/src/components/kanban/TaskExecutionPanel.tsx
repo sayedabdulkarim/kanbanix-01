@@ -40,13 +40,15 @@ interface TaskExecutionPanelProps {
   projectId: string;
   repoUrl?: string;
   onClose: () => void;
+  onTaskUpdate?: (updatedTask: any) => void;
 }
 
 export default function TaskExecutionPanel({ 
   task, 
   projectId, 
   repoUrl,
-  onClose 
+  onClose,
+  onTaskUpdate
 }: TaskExecutionPanelProps) {
   const [execution, setExecution] = useState<TaskExecution | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,6 +63,10 @@ export default function TaskExecutionPanel({
   const [committing, setCommitting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [prStatus, setPrStatus] = useState<any>(null);
+  const [isCommitted, setIsCommitted] = useState(false);
+  const [commitStatus, setCommitStatus] = useState<{ type: 'success' | 'error' | null; message: string }>({ type: null, message: '' });
+  const [prCreated, setPrCreated] = useState(false);
+  const [prUrl, setPrUrl] = useState<string | null>(null);
 
   // WebSocket for real-time updates
   const { execution: socketExecution, logs: socketLogs } = useExecutionSocket(execution?.id || null);
@@ -198,19 +204,42 @@ export default function TaskExecutionPanel({
       const data = await response.json();
       
       if (response.ok) {
+        // Set PR created state
+        setPrCreated(true);
+        setPrUrl(data.pullRequest?.url || null);
+        
         // Open the PR in a new tab
         if (data.pullRequest?.url) {
           window.open(data.pullRequest.url, '_blank');
         }
         
-        // Optionally update UI to show PR was created
         console.log('PR created successfully:', data.pullRequest);
+        
+        // Show success message
+        setCommitStatus({ 
+          type: 'success', 
+          message: `Pull Request created successfully! PR #${data.pullRequest?.number || ''}` 
+        });
         
         // Refresh branch info
         fetchBranchInfo();
+        
+        // Call the onTaskUpdate callback if provided to update the task status
+        if (onTaskUpdate) {
+          // Update the task to show it's in review
+          onTaskUpdate({
+            ...task,
+            status: 'inReview',
+            githubPrNumber: data.pullRequest?.number,
+            githubPrUrl: data.pullRequest?.url
+          });
+        }
       } else {
         console.error('Failed to create PR:', data.error);
-        alert(`Failed to create PR: ${data.error}`);
+        setCommitStatus({ 
+          type: 'error', 
+          message: data.error || 'Failed to create pull request' 
+        });
       }
     } catch (error) {
       console.error('Error creating PR:', error);
@@ -224,6 +253,8 @@ export default function TaskExecutionPanel({
     if (!projectId || !commitMessage.trim()) return;
     
     setCommitting(true);
+    setCommitStatus({ type: null, message: '' });
+    
     try {
       const response = await fetch('/api/workspace/commit', {
         method: 'POST',
@@ -236,12 +267,33 @@ export default function TaskExecutionPanel({
       });
       
       if (response.ok) {
+        const data = await response.json();
         setShowCommitDialog(false);
         setCommitMessage('');
+        setIsCommitted(true);
+        setCommitStatus({ 
+          type: 'success', 
+          message: `Changes committed successfully! ${data.commitHash ? `(${data.commitHash.slice(0, 7)})` : ''}` 
+        });
         fetchBranchInfo();
+        
+        // Clear success message after 5 seconds
+        setTimeout(() => {
+          setCommitStatus({ type: null, message: '' });
+        }, 5000);
+      } else {
+        const error = await response.json();
+        setCommitStatus({ 
+          type: 'error', 
+          message: error.error || 'Failed to commit changes' 
+        });
       }
     } catch (error) {
       console.error('Commit error:', error);
+      setCommitStatus({ 
+        type: 'error', 
+        message: 'Failed to commit changes. Please try again.' 
+      });
     } finally {
       setCommitting(false);
     }
@@ -274,9 +326,12 @@ export default function TaskExecutionPanel({
     switch (status) {
       case 'done': return 'Done';
       case 'inProgress': 
-        // Show AI completion status if execution is done but task still in progress
+        // Show completion status if execution is done but task still in progress
         if (execution?.status === 'completed') {
-          return 'In Progress (AI Complete)';
+          return 'In Progress (Completed)';
+        }
+        if (execution?.status === 'running') {
+          return 'In Progress (Running...)';
         }
         return 'In Progress';
       case 'inReview': return 'In Review';
@@ -409,32 +464,54 @@ export default function TaskExecutionPanel({
             <span className="font-medium">Dev Server</span>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleCreatePR();
-              }}
-              disabled={creatingPR || !branchInfo?.branch || branchInfo?.branch === 'main'}
-              className="px-3 py-1 text-sm flex items-center gap-2 border rounded hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {creatingPR ? (
-                <>
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                <>
-                  <GitPullRequest className="h-3 w-3" />
-                  Create PR
-                </>
-              )}
-            </button>
-            <button className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700">
-              <span className="flex items-center gap-1">
-                <GitBranch className="h-3 w-3" />
-                Merge
-              </span>
-            </button>
+            {/* Show action buttons when execution is completed */}
+            {execution?.status === 'completed' && (
+              <>
+                {!prCreated ? (
+                  <div className="relative group">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCreatePR();
+                      }}
+                      disabled={creatingPR || !branchInfo?.branch || branchInfo?.branch === 'main' || !isCommitted}
+                      className="px-3 py-1 text-sm flex items-center gap-2 border rounded hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {creatingPR ? (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Creating...
+                        </>
+                      ) : (
+                        <>
+                          <GitPullRequest className="h-3 w-3" />
+                          Create PR
+                        </>
+                      )}
+                    </button>
+                    {/* Tooltip for disabled state */}
+                    {!isCommitted && (
+                      <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 text-xs bg-popover text-popover-foreground rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">
+                        Commit changes first to create a PR
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-1 text-sm text-green-500">
+                    <GitPullRequest className="h-3 w-3" />
+                    PR Created
+                  </div>
+                )}
+              </>
+            )}
+            {/* Show status when running */}
+            {execution?.status === 'running' && (
+              <div className="flex items-center gap-2 px-3 py-1 text-sm text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                AI is generating code...
+              </div>
+            )}
+            {/* New Attempt button always visible */}
             <button className="px-3 py-1 text-sm border rounded hover:bg-secondary">
               + New Attempt
             </button>
@@ -535,7 +612,7 @@ export default function TaskExecutionPanel({
                 >
                   Collapse All
                 </button>
-                {execution?.status === 'completed' && (
+                {execution?.status === 'completed' && !isCommitted && (
                   <button
                     onClick={() => {
                       setCommitMessage(`feat: ${task.title}`);
@@ -547,8 +624,23 @@ export default function TaskExecutionPanel({
                     Commit
                   </button>
                 )}
+                {isCommitted && (
+                  <span className="px-3 py-1 text-sm text-green-500">
+                    ✓ Committed
+                  </span>
+                )}
               </div>
             </div>
+            {/* Status Messages */}
+            {commitStatus.type && (
+              <div className={`mx-4 mb-3 p-3 rounded-md text-sm ${
+                commitStatus.type === 'success' ? 'bg-green-50 text-green-800 dark:bg-green-900/20 dark:text-green-300' :
+                'bg-red-50 text-red-800 dark:bg-red-900/20 dark:text-red-300'
+              }`}>
+                {commitStatus.message}
+              </div>
+            )}
+            
             {execution?.changes && projectId && (
               <DiffViewer 
                 projectId={projectId} 

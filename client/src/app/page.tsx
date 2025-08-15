@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
-import { Plus, Search, Github, Loader2 } from 'lucide-react';
+import { Plus, Search, Github, Loader2, RefreshCw } from 'lucide-react';
 import ProjectCard from '@/components/projects/ProjectCard';
 import CreateProjectModal from '@/components/projects/CreateProjectModal';
 import RepositorySelector from '@/components/github/RepositorySelector';
@@ -94,6 +94,7 @@ function LandingPage() {
 function Dashboard() {
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isRepositorySelectorOpen, setIsRepositorySelectorOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -102,9 +103,29 @@ function Dashboard() {
     fetchProjects();
   }, []);
 
-  const fetchProjects = async () => {
+  const fetchProjects = async (skipSync = false) => {
     try {
       setLoading(true);
+      
+      // First, sync with GitHub to check if repos still exist (unless skipped)
+      if (!skipSync) {
+        try {
+          const syncResponse = await fetch('/api/projects/sync-repos', {
+            method: 'POST',
+          });
+          if (syncResponse.ok) {
+            const syncResult = await syncResponse.json();
+            if (syncResult.deleted > 0) {
+              console.log(`Removed ${syncResult.deleted} deleted GitHub repositories:`, syncResult.deletedProjects);
+            }
+          }
+        } catch (syncError) {
+          // If sync fails, still continue to fetch projects
+          console.warn('GitHub sync failed, continuing with cached data:', syncError);
+        }
+      }
+      
+      // Now fetch the updated project list
       const response = await fetch('/api/projects');
       if (response.ok) {
         const data = await response.json();
@@ -114,6 +135,30 @@ function Dashboard() {
       console.error('Error fetching projects:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleManualSync = async () => {
+    setSyncing(true);
+    try {
+      const syncResponse = await fetch('/api/projects/sync-repos', {
+        method: 'POST',
+      });
+      if (syncResponse.ok) {
+        const syncResult = await syncResponse.json();
+        if (syncResult.deleted > 0) {
+          alert(`Removed ${syncResult.deleted} deleted GitHub repositories: ${syncResult.deletedProjects.join(', ')}`);
+        } else {
+          console.log('All repositories are in sync');
+        }
+        // Fetch projects without triggering another sync
+        await fetchProjects(true);
+      }
+    } catch (error) {
+      console.error('Error syncing with GitHub:', error);
+      alert('Failed to sync with GitHub. Please try again.');
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -209,6 +254,15 @@ function Dashboard() {
             >
               <Plus className="h-5 w-5" />
               Create New Project
+            </button>
+            <button
+              onClick={handleManualSync}
+              disabled={syncing}
+              className="flex items-center gap-2 px-6 py-3 border border-input rounded-lg hover:bg-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Sync with GitHub to remove deleted repositories"
+            >
+              <RefreshCw className={cn("h-5 w-5", syncing && "animate-spin")} />
+              {syncing ? 'Syncing...' : 'Sync with GitHub'}
             </button>
           </div>
         </div>

@@ -202,13 +202,13 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
     console.log('Sending MCP request:', JSON.stringify(request));
     mcpProcess.stdin.write(JSON.stringify(request) + '\n');
 
-    // Set timeout
+    // Set timeout - increased for create-next-app which can take longer
     const timeout = setTimeout(() => {
       if (!responseReceived) {
         mcpProcess.kill();
         reject(new Error('MCP tool execution timeout'));
       }
-    }, 30000); // 30 second timeout
+    }, 120000); // 120 second timeout for longer operations like create-next-app
 
     // Handle process close
     mcpProcess.on('close', (code) => {

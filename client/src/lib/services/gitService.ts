@@ -39,7 +39,9 @@ class GitService {
     taskId: string, 
     taskTitle: string
   ): Promise<string> {
-    const branchName = this.createBranchName(taskId, taskTitle);
+    const baseBranchName = this.createBranchName(taskId, taskTitle);
+    let branchName = baseBranchName;
+    let attempt = 1;
     
     try {
       // Clean up any git lock files first
@@ -60,47 +62,73 @@ class GitService {
         console.log('Could not get current branch, assuming we need to create new one');
       }
       
-      // If we're already on the target branch, just return it
-      if (currentBranch.trim() === branchName) {
-        console.log(`Already on branch: ${branchName}`);
-        return branchName;
-      }
-      
-      // Check if branch exists locally
-      try {
-        await execAsync(`git rev-parse --verify ${branchName}`, { 
-          cwd: workspacePath 
-        });
-        // Branch exists, just checkout
-        await execAsync(`git checkout ${branchName}`, { 
-          cwd: workspacePath 
-        });
-        console.log(`Checked out existing branch: ${branchName}`);
-        return branchName;
-      } catch (e) {
-        // Branch doesn't exist, create it
+      // Find a unique branch name
+      while (attempt <= 10) {
+        // Check if branch exists locally or remotely
+        let branchExists = false;
         
-        // First ensure we're on main
+        // Check local branches
         try {
-          await execAsync('git checkout main', { cwd: workspacePath });
-        } catch (mainError) {
-          // Try master if main doesn't exist
+          await execAsync(`git rev-parse --verify ${branchName}`, { 
+            cwd: workspacePath 
+          });
+          branchExists = true;
+        } catch (e) {
+          // Branch doesn't exist locally
+        }
+        
+        // Check remote branches
+        if (!branchExists) {
           try {
-            await execAsync('git checkout master', { cwd: workspacePath });
-          } catch (masterError) {
-            // If neither exists, we're probably on initial commit
-            console.log('No main/master branch, creating branch from current state');
+            const { stdout } = await execAsync(
+              `git ls-remote --heads origin ${branchName}`, 
+              { cwd: workspacePath }
+            );
+            if (stdout.trim()) {
+              branchExists = true;
+            }
+          } catch (e) {
+            // Branch doesn't exist remotely
           }
         }
         
-        // Create and checkout new branch
-        await execAsync(`git checkout -b ${branchName}`, { 
-          cwd: workspacePath 
-        });
+        if (!branchExists) {
+          // Found a unique branch name
+          break;
+        }
         
-        console.log(`Created and checked out branch: ${branchName}`);
-        return branchName;
+        // Branch exists, try with version number
+        attempt++;
+        branchName = `${baseBranchName}-v${attempt}`;
+        console.log(`Branch exists, trying: ${branchName}`);
       }
+      
+      if (attempt > 10) {
+        throw new Error('Could not create unique branch name after 10 attempts');
+      }
+      
+      // Branch doesn't exist, create it
+      
+      // First ensure we're on main
+      try {
+        await execAsync('git checkout main', { cwd: workspacePath });
+      } catch (mainError) {
+        // Try master if main doesn't exist
+        try {
+          await execAsync('git checkout master', { cwd: workspacePath });
+        } catch (masterError) {
+          // If neither exists, we're probably on initial commit
+          console.log('No main/master branch, creating branch from current state');
+        }
+      }
+      
+      // Create and checkout new branch
+      await execAsync(`git checkout -b ${branchName}`, { 
+        cwd: workspacePath 
+      });
+      
+      console.log(`Created and checked out unique branch: ${branchName}`);
+      return branchName;
     } catch (error: any) {
       console.error('Error creating task branch:', error);
       throw error;

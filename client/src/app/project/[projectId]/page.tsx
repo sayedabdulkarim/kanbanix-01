@@ -636,6 +636,27 @@ export default function ProjectBoard() {
                 projectId={params.projectId as string}
                 repoUrl={project.repoUrl}
                 onClose={() => setSelectedTaskForDetails(null)}
+                onTaskUpdate={(updatedTask) => {
+                  // Find the In Review column
+                  const inReviewColumn = project.columns.find(col => 
+                    col.name.toLowerCase().includes('review')
+                  );
+                  
+                  // Update the task with the correct columnId
+                  const taskWithColumn = {
+                    ...updatedTask,
+                    columnId: inReviewColumn?.id || updatedTask.columnId
+                  };
+                  
+                  // Update the task in state
+                  setTasks(prevTasks => 
+                    prevTasks.map(t => 
+                      t.id === taskWithColumn.id ? taskWithColumn : t
+                    )
+                  );
+                  // Also update selectedTaskForDetails to reflect the new status
+                  setSelectedTaskForDetails(taskWithColumn);
+                }}
               />
             ) : (
               <TaskDetailsSplitView
@@ -655,6 +676,25 @@ export default function ProjectBoard() {
               projectId={params.projectId as string}
               repoUrl={project.repoUrl}
               onClose={() => setExecutingTaskId(null)}
+              onTaskUpdate={(updatedTask) => {
+                // Find the In Review column
+                const inReviewColumn = project.columns.find(col => 
+                  col.name.toLowerCase().includes('review')
+                );
+                
+                // Update the task with the correct columnId
+                const taskWithColumn = {
+                  ...updatedTask,
+                  columnId: inReviewColumn?.id || updatedTask.columnId
+                };
+                
+                // Update the task in state
+                setTasks(prevTasks => 
+                  prevTasks.map(t => 
+                    t.id === taskWithColumn.id ? taskWithColumn : t
+                  )
+                );
+              }}
             />
           </div>
         )}
