@@ -328,7 +328,9 @@ export default function ProjectBoard() {
     // Check if we're dragging over a column
     if (project.columns.some(col => col.id === overColumnId)) {
       if (activeTask.columnId !== overColumnId) {
-        moveTask(activeTask.id, overColumnId, 0);
+        // Don't call moveTask here - it will be called in handleDragEnd
+        // This prevents duplicate API calls
+        // moveTask(activeTask.id, overColumnId, 0);
       }
     }
   };
@@ -374,53 +376,9 @@ export default function ProjectBoard() {
     else if (project.columns.some(col => col.id === over.id)) {
       const newColumnId = over.id as string;
       if (activeTask.columnId !== newColumnId) {
-        // Find the new column to determine status
-        const newColumn = project.columns.find(col => col.id === newColumnId);
-        let newStatus = activeTask.status;
-        
-        // Map column name to status
-        if (newColumn) {
-          const columnNameLower = newColumn.name.toLowerCase();
-          if (columnNameLower.includes('backlog')) {
-            newStatus = 'backlog';
-          } else if (columnNameLower.includes('to do') || columnNameLower === 'todo') {
-            newStatus = 'todo';
-          } else if (columnNameLower.includes('in progress') || columnNameLower === 'in progress') {
-            newStatus = 'inProgress';
-          } else if (columnNameLower.includes('in review') || columnNameLower === 'review') {
-            newStatus = 'inReview';
-          } else if (columnNameLower.includes('done') || columnNameLower === 'completed') {
-            newStatus = 'done';
-          }
-        }
-        
-        // Update task in database with new column AND status
-        fetch(`/api/tasks/${activeTask.id}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ 
-            columnId: newColumnId,
-            status: newStatus,
-            order: 0 
-          }),
-        }).then(response => {
-          if (!response.ok) {
-            console.error('Failed to update task');
-          }
-        }).catch(error => {
-          console.error('Error updating task:', error);
-        });
-        
-        // Update local state
-        setTasks(prevTasks => 
-          prevTasks.map(t => 
-            t.id === activeTask.id 
-              ? { ...t, columnId: newColumnId, status: newStatus, order: 0 }
-              : t
-          )
-        );
+        // Use the existing moveTask function which handles everything
+        // including status updates, AI triggers, and local state
+        moveTask(activeTask.id, newColumnId, 0);
       }
     }
     

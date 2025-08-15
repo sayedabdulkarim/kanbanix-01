@@ -107,31 +107,26 @@ export async function POST(request: NextRequest) {
         await prisma.task.update({
           where: { id: taskId },
           data: {
-            metadata: {
-              ...(task.metadata as any || {}),
-              pullRequest: {
-                number: pr.number,
-                url: pr.html_url,
-                state: pr.state,
-                createdAt: pr.created_at,
-              }
-            }
+            githubPrNumber: pr.number,
+            githubPrId: pr.node_id,
+            githubState: pr.state,
           }
         });
 
         // Log activity
         await prisma.activity.create({
           data: {
-            projectId,
             taskId,
             userId: session.user.id,
-            type: 'task',
-            action: 'pr_created',
-            details: {
+            type: 'pr_created',
+            description: `Created PR #${pr.number}: ${pr.title}`,
+            metadata: JSON.stringify({
+              projectId,
+              action: 'pr_created',
               prNumber: pr.number,
               prUrl: pr.html_url,
               branch: branchInfo.current,
-            }
+            })
           }
         });
       }

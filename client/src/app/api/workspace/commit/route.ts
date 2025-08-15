@@ -63,34 +63,30 @@ export async function POST(request: NextRequest) {
     if (taskId) {
       await prisma.activity.create({
         data: {
-          projectId,
           taskId,
           userId: session.user.id,
-          type: 'task',
-          action: 'commit',
-          details: {
+          type: 'commit',
+          description: `Committed ${uncommittedChanges.length} file(s) with message: "${message}"`,
+          metadata: JSON.stringify({
+            projectId,
+            action: 'commit',
             commitHash: commitInfo.hash,
             message: commitInfo.message,
             filesChanged: uncommittedChanges.length
-          }
+          })
         }
       });
       
-      // Update task metadata
-      const task = await prisma.task.findUnique({ where: { id: taskId } });
-      await prisma.task.update({
-        where: { id: taskId },
-        data: {
-          metadata: {
-            ...(task?.metadata as any || {}),
-            lastCommit: {
-              hash: commitInfo.hash,
-              message: commitInfo.message,
-              date: commitInfo.date
-            }
+      // Update task with branch info if not already set
+      const branchInfo = await gitService.getBranchInfo(workspacePath);
+      if (branchInfo.current && branchInfo.current !== 'main' && branchInfo.current !== 'master') {
+        await prisma.task.update({
+          where: { id: taskId },
+          data: {
+            githubBranch: branchInfo.current
           }
-        }
-      });
+        });
+      }
     }
     
     return NextResponse.json({
