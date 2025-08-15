@@ -254,11 +254,17 @@ export class AIAgentService {
     
     // Create task-specific branch in workspace
     try {
-      // Skip branch creation for now - it's failing with auth issues
-      console.log('Skipping branch creation - auth issues need to be resolved');
-      await this.addExecutionLog(executionId, 'info', 'Working on main branch');
+      const gitService = (await import('@/lib/services/gitService')).default;
+      const branchName = await gitService.createTaskBranch(
+        input.context.workingDirectory || input.context.workspacePath,
+        execution.taskId,
+        input.title
+      );
+      console.log('Created task branch:', branchName);
+      await this.addExecutionLog(executionId, 'info', `Working on branch: ${branchName}`);
     } catch (error) {
-      console.warn('Could not create task branch:', error);
+      console.warn('Could not create task branch, using main:', error);
+      await this.addExecutionLog(executionId, 'warning', 'Could not create branch, using main branch');
     }
     
     await this.updateProgress(executionId, 30, 'Calling MCP server for code generation');

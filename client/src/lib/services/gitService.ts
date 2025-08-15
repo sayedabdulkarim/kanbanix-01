@@ -42,32 +42,67 @@ class GitService {
     const branchName = this.createBranchName(taskId, taskTitle);
     
     try {
-      // First, ensure we're on main/master
-      await execAsync('git checkout main || git checkout master', { 
-        cwd: workspacePath 
-      });
+      // Clean up any git lock files first
+      try {
+        await execAsync('rm -f .git/index.lock', { cwd: workspacePath });
+      } catch (e) {
+        // Ignore if file doesn't exist
+      }
       
-      // Pull latest changes
-      await execAsync('git pull origin main || git pull origin master', { 
-        cwd: workspacePath 
-      });
+      // Get current branch
+      let currentBranch = '';
+      try {
+        const result = await execAsync('git branch --show-current', { 
+          cwd: workspacePath 
+        });
+        currentBranch = result.stdout;
+      } catch (e) {
+        console.log('Could not get current branch, assuming we need to create new one');
+      }
       
-      // Create and checkout new branch
-      await execAsync(`git checkout -b ${branchName}`, { 
-        cwd: workspacePath 
-      });
+      // If we're already on the target branch, just return it
+      if (currentBranch.trim() === branchName) {
+        console.log(`Already on branch: ${branchName}`);
+        return branchName;
+      }
       
-      console.log(`Created and checked out branch: ${branchName}`);
-      return branchName;
-    } catch (error: any) {
-      // If branch already exists, just checkout
-      if (error.message.includes('already exists')) {
+      // Check if branch exists locally
+      try {
+        await execAsync(`git rev-parse --verify ${branchName}`, { 
+          cwd: workspacePath 
+        });
+        // Branch exists, just checkout
         await execAsync(`git checkout ${branchName}`, { 
           cwd: workspacePath 
         });
         console.log(`Checked out existing branch: ${branchName}`);
         return branchName;
+      } catch (e) {
+        // Branch doesn't exist, create it
+        
+        // First ensure we're on main
+        try {
+          await execAsync('git checkout main', { cwd: workspacePath });
+        } catch (mainError) {
+          // Try master if main doesn't exist
+          try {
+            await execAsync('git checkout master', { cwd: workspacePath });
+          } catch (masterError) {
+            // If neither exists, we're probably on initial commit
+            console.log('No main/master branch, creating branch from current state');
+          }
+        }
+        
+        // Create and checkout new branch
+        await execAsync(`git checkout -b ${branchName}`, { 
+          cwd: workspacePath 
+        });
+        
+        console.log(`Created and checked out branch: ${branchName}`);
+        return branchName;
       }
+    } catch (error: any) {
+      console.error('Error creating task branch:', error);
       throw error;
     }
   }
@@ -78,36 +113,58 @@ class GitService {
   async getBranchInfo(workspacePath: string): Promise<GitBranchInfo> {
     try {
       // Get current branch
-      const { stdout: currentBranch } = await execAsync(
-        'git branch --show-current',
-        { cwd: workspacePath }
-      );
+      let currentBranch = 'main';
+      try {
+        const { stdout } = await execAsync(
+          'git branch --show-current',
+          { cwd: workspacePath }
+        );
+        currentBranch = stdout.trim() || 'main';
+      } catch (e) {
+        console.warn('Could not get current branch, defaulting to main');
+      }
       
       // Get all branches
-      const { stdout: allBranchesOutput } = await execAsync(
-        'git branch -a',
-        { cwd: workspacePath }
-      );
-      
-      const allBranches = allBranchesOutput
-        .split('\n')
-        .map(b => b.trim().replace('* ', ''))
-        .filter(b => b);
+      let allBranches = [currentBranch];
+      try {
+        const { stdout: allBranchesOutput } = await execAsync(
+          'git branch -a',
+          { cwd: workspacePath }
+        );
+        
+        allBranches = allBranchesOutput
+          .split('\n')
+          .map(b => b.trim().replace('* ', ''))
+          .filter(b => b);
+      } catch (e) {
+        console.warn('Could not get all branches');
+      }
       
       // Check for uncommitted changes
-      const { stdout: statusOutput } = await execAsync(
-        'git status --porcelain',
-        { cwd: workspacePath }
-      );
+      let hasUncommittedChanges = false;
+      try {
+        const { stdout: statusOutput } = await execAsync(
+          'git status --porcelain',
+          { cwd: workspacePath }
+        );
+        hasUncommittedChanges = statusOutput.trim().length > 0;
+      } catch (e) {
+        console.warn('Could not get status');
+      }
       
       return {
-        current: currentBranch.trim(),
+        current: currentBranch,
         all: allBranches,
-        hasUncommittedChanges: statusOutput.trim().length > 0
+        hasUncommittedChanges
       };
     } catch (error) {
       console.error('Error getting branch info:', error);
-      throw error;
+      // Return sensible defaults instead of throwing
+      return {
+        current: 'main',
+        all: ['main'],
+        hasUncommittedChanges: false
+      };
     }
   }
 
@@ -158,35 +215,6 @@ class GitService {
     }
   }
 
-  /**
-   * Push branch to remote
-   */
-  async pushBranch(
-    workspacePath: string,
-    branchName: string,
-    accessToken?: string
-  ): Promise<void> {
-    try {
-      // Set upstream and push
-      const pushCommand = accessToken
-        ? `git push -u origin ${branchName}`
-        : `git push -u origin ${branchName}`;
-      
-      await execAsync(pushCommand, {
-        cwd: workspacePath,
-        env: {
-          ...process.env,
-          GIT_ASKPASS: 'echo',
-          GIT_USERNAME: accessToken || ''
-        }
-      });
-      
-      console.log(`Pushed branch ${branchName} to remote`);
-    } catch (error) {
-      console.error('Error pushing branch:', error);
-      throw error;
-    }
-  }
 
   /**
    * Create a pull request (using GitHub CLI or API)
@@ -212,6 +240,67 @@ class GitService {
         throw new Error('GitHub CLI not installed. Please install gh to create PRs.');
       }
       throw error;
+    }
+  }
+
+  /**
+   * Push branch to remote repository
+   */
+  async pushBranch(workspacePath: string, branchName: string, accessToken?: string): Promise<void> {
+    try {
+      // First try to push with the existing remote
+      try {
+        const { stdout } = await execAsync(
+          `git push -u origin ${branchName}`,
+          { cwd: workspacePath }
+        );
+        console.log('Branch pushed successfully:', stdout);
+        return;
+      } catch (error: any) {
+        // If push fails, try to set the remote with token
+        if (accessToken && (error.message.includes('Authentication failed') || error.message.includes('could not read Username'))) {
+          console.log('Attempting to push with access token...');
+          
+          // Get the remote URL
+          const { stdout: remoteUrl } = await execAsync(
+            'git remote get-url origin',
+            { cwd: workspacePath }
+          );
+          
+          // Parse GitHub URL
+          const match = remoteUrl.match(/github\.com[:/]([^/]+)\/(.+?)(\.git)?$/);
+          if (match) {
+            const [, owner, repo] = match;
+            const authenticatedUrl = `https://${accessToken}@github.com/${owner}/${repo.replace('.git', '')}.git`;
+            
+            // Set authenticated remote temporarily
+            await execAsync(
+              `git remote set-url origin ${authenticatedUrl}`,
+              { cwd: workspacePath }
+            );
+            
+            try {
+              // Push with authenticated remote
+              await execAsync(
+                `git push -u origin ${branchName}`,
+                { cwd: workspacePath }
+              );
+              console.log('Branch pushed successfully with token');
+            } finally {
+              // Reset remote URL to original (without token)
+              await execAsync(
+                `git remote set-url origin ${remoteUrl.trim()}`,
+                { cwd: workspacePath }
+              );
+            }
+            return;
+          }
+        }
+        throw error;
+      }
+    } catch (error: any) {
+      console.error('Error pushing branch:', error);
+      throw new Error(`Failed to push branch: ${error.message}`);
     }
   }
 

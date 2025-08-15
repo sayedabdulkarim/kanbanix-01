@@ -66,8 +66,12 @@ export default function TaskExecutionPanel({
   useEffect(() => {
     if (task?.id) {
       fetchExecution();
+      // Also fetch branch info on initial load
+      if (projectId) {
+        fetchBranchInfo();
+      }
     }
-  }, [task?.id]);
+  }, [task?.id, projectId]);
   
   // Separate polling effect
   useEffect(() => {
@@ -98,7 +102,8 @@ export default function TaskExecutionPanel({
   }, [execution?.status]);
 
   useEffect(() => {
-    if (execution?.status === 'completed' && projectId) {
+    // Fetch branch info when execution status changes
+    if (execution && projectId) {
       fetchBranchInfo();
     }
   }, [execution?.status, projectId]);
@@ -132,14 +137,49 @@ export default function TaskExecutionPanel({
     }
   };
 
-  const handleCreatePR = () => {
-    if (repoUrl && branchInfo?.branch) {
-      const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/\.]+)/);
-      if (match) {
-        const [, owner, repo] = match;
-        const prUrl = `https://github.com/${owner}/${repo}/compare/main...${branchInfo.branch}?expand=1`;
-        window.open(prUrl, '_blank');
+  const [creatingPR, setCreatingPR] = useState(false);
+  
+  const handleCreatePR = async () => {
+    if (!projectId || !task?.id) {
+      console.error('Missing projectId or taskId');
+      return;
+    }
+    
+    setCreatingPR(true);
+    try {
+      const response = await fetch('/api/workspace/pr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          taskId: task.id,
+          title: `feat: ${task.title}`,
+          description: task.description
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        // Open the PR in a new tab
+        if (data.pullRequest?.url) {
+          window.open(data.pullRequest.url, '_blank');
+        }
+        
+        // Optionally update UI to show PR was created
+        console.log('PR created successfully:', data.pullRequest);
+        
+        // Refresh branch info
+        fetchBranchInfo();
+      } else {
+        console.error('Failed to create PR:', data.error);
+        alert(`Failed to create PR: ${data.error}`);
       }
+    } catch (error) {
+      console.error('Error creating PR:', error);
+      alert('Failed to create pull request. Please try again.');
+    } finally {
+      setCreatingPR(false);
     }
   };
 
@@ -284,10 +324,10 @@ export default function TaskExecutionPanel({
               <div className="font-medium">Claude</div>
             </div>
             <div>
-              <span className="text-muted-foreground">BASE BRANCH</span>
+              <span className="text-muted-foreground">CURRENT BRANCH</span>
               <div className="flex items-center gap-1">
                 <GitBranch className="h-3 w-3" />
-                <span className="font-medium">main</span>
+                <span className="font-medium">{branchInfo?.branch || 'main'}</span>
               </div>
             </div>
             <div>
@@ -299,7 +339,7 @@ export default function TaskExecutionPanel({
             <div className="col-span-2">
               <span className="text-muted-foreground">WORKTREE PATH</span>
               <div className="font-mono text-xs mt-1 p-2 bg-muted rounded break-all">
-                /projects/{projectId}/{branchInfo?.branch || 'main'}
+                projects/{projectId}
               </div>
             </div>
           </div>
@@ -322,10 +362,20 @@ export default function TaskExecutionPanel({
                 e.stopPropagation();
                 handleCreatePR();
               }}
-              className="px-3 py-1 text-sm flex items-center gap-2 border rounded hover:bg-secondary"
+              disabled={creatingPR || !branchInfo?.branch || branchInfo?.branch === 'main'}
+              className="px-3 py-1 text-sm flex items-center gap-2 border rounded hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <GitPullRequest className="h-3 w-3" />
-              Create PR
+              {creatingPR ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <GitPullRequest className="h-3 w-3" />
+                  Create PR
+                </>
+              )}
             </button>
             <button className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700">
               <span className="flex items-center gap-1">
