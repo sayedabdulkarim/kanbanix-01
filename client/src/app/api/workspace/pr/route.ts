@@ -102,14 +102,28 @@ export async function POST(request: NextRequest) {
 
       console.log(`PR created: ${pr.html_url}`);
 
-      // Step 3: Update task with PR info if task exists
+      // Step 3: Update task with PR info and move to In Review
       if (task) {
+        // Find the "In Review" column for this project
+        const inReviewColumn = await prisma.column.findFirst({
+          where: {
+            projectId,
+            OR: [
+              { name: { contains: 'Review', mode: 'insensitive' } },
+              { name: { contains: 'review', mode: 'insensitive' } },
+              { name: 'In Review' },
+            ]
+          }
+        });
+
         await prisma.task.update({
           where: { id: taskId },
           data: {
             githubPrNumber: pr.number,
             githubPrId: pr.node_id,
             githubState: pr.state,
+            status: 'inReview',
+            columnId: inReviewColumn?.id || task.columnId, // Move to In Review column if found
           }
         });
 

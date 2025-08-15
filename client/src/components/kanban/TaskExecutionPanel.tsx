@@ -59,6 +59,8 @@ export default function TaskExecutionPanel({
   const [showCommitDialog, setShowCommitDialog] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
   const [committing, setCommitting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [prStatus, setPrStatus] = useState<any>(null);
 
   // WebSocket for real-time updates
   const { execution: socketExecution, logs: socketLogs } = useExecutionSocket(execution?.id || null);
@@ -139,6 +141,41 @@ export default function TaskExecutionPanel({
 
   const [creatingPR, setCreatingPR] = useState(false);
   
+  const handleSyncPR = async () => {
+    if (!projectId || !task?.id) return;
+    
+    setSyncing(true);
+    try {
+      const response = await fetch('/api/workspace/sync-pr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          taskId: task.id,
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        setPrStatus(data.pr);
+        
+        // If task status changed, reload the page to update the board
+        if (data.task.status !== task.status) {
+          window.location.reload();
+        }
+        
+        console.log('PR sync successful:', data);
+      } else {
+        console.error('PR sync failed:', data.error);
+      }
+    } catch (error) {
+      console.error('Error syncing PR:', error);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const handleCreatePR = async () => {
     if (!projectId || !task?.id) {
       console.error('Missing projectId or taskId');
@@ -332,8 +369,23 @@ export default function TaskExecutionPanel({
             </div>
             <div>
               <span className="text-muted-foreground">MERGE STATUS</span>
-              <div className="font-medium">
-                <span className="text-yellow-500">● Not merged</span>
+              <div className="font-medium flex items-center gap-2">
+                {task?.githubState === 'merged' ? (
+                  <span className="text-green-500">● Merged</span>
+                ) : task?.githubPrNumber ? (
+                  <span className="text-yellow-500">● Not merged</span>
+                ) : (
+                  <span className="text-muted-foreground">● No PR</span>
+                )}
+                {task?.githubPrNumber && (
+                  <button
+                    onClick={handleSyncPR}
+                    disabled={syncing}
+                    className="text-xs px-2 py-0.5 border rounded hover:bg-secondary"
+                  >
+                    {syncing ? 'Syncing...' : 'Sync'}
+                  </button>
+                )}
               </div>
             </div>
             <div className="col-span-2">
