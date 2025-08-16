@@ -333,6 +333,30 @@ class GitService {
   }
 
   /**
+   * Get last commit information
+   */
+  async getLastCommit(workspacePath: string): Promise<GitCommitInfo> {
+    try {
+      const { stdout } = await execAsync(
+        'git log -1 --format="%H|%s|%an|%ai"',
+        { cwd: workspacePath }
+      );
+      
+      const [hash, message, author, date] = stdout.trim().split('|');
+      
+      return {
+        hash,
+        message,
+        author,
+        date: new Date(date)
+      };
+    } catch (error) {
+      console.error('Error getting last commit:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get uncommitted changes
    */
   async getUncommittedChanges(workspacePath: string): Promise<string[]> {

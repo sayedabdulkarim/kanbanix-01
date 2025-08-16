@@ -250,19 +250,24 @@ export default function TaskExecutionPanel({
   };
 
   const handleCommit = async () => {
-    if (!projectId || !commitMessage.trim()) return;
+    if (!projectId) return;
     
     setCommitting(true);
     setCommitStatus({ type: null, message: '' });
     
     try {
+      // Combine the base message with user's custom message
+      const fullCommitMessage = commitMessage.trim() 
+        ? `feat: ${task.title}\n\n${commitMessage.trim()}`
+        : `feat: ${task.title}`;
+      
       const response = await fetch('/api/workspace/commit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectId,
           taskId: task.id,
-          message: commitMessage
+          message: fullCommitMessage
         })
       });
       
@@ -491,8 +496,11 @@ export default function TaskExecutionPanel({
                     </button>
                     {/* Tooltip for disabled state */}
                     {!isCommitted && (
-                      <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 text-xs bg-popover text-popover-foreground rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">
-                        Commit changes first to create a PR
+                      <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 text-xs bg-popover text-popover-foreground rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                        <div className="text-center">
+                          <div className="font-medium mb-1">Commit changes first</div>
+                          <div className="text-muted-foreground">Go to Diffs tab → Click Commit button</div>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -615,7 +623,7 @@ export default function TaskExecutionPanel({
                 {execution?.status === 'completed' && !isCommitted && (
                   <button
                     onClick={() => {
-                      setCommitMessage(`feat: ${task.title}`);
+                      setCommitMessage('');
                       setShowCommitDialog(true);
                     }}
                     className="px-3 py-1 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90"
@@ -689,11 +697,15 @@ export default function TaskExecutionPanel({
         <div className="absolute inset-0 bg-black/50 flex items-center justify-center p-4">
           <div className="bg-card rounded-lg p-6 w-full max-w-md">
             <h3 className="text-lg font-semibold mb-4">Commit Changes</h3>
+            <div className="mb-2 text-sm text-muted-foreground">
+              <p>Base message: <span className="font-mono">feat: {task.title}</span></p>
+              <p className="mt-1">Add additional details below:</p>
+            </div>
             <textarea
               value={commitMessage}
               onChange={(e) => setCommitMessage(e.target.value)}
               className="w-full h-24 px-3 py-2 border rounded-md bg-background mb-4"
-              placeholder="Describe your changes..."
+              placeholder="Additional details about this change..."
             />
             <div className="flex gap-2 justify-end">
               <button
@@ -705,7 +717,7 @@ export default function TaskExecutionPanel({
               <button
                 onClick={handleCommit}
                 className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90"
-                disabled={committing || !commitMessage.trim()}
+                disabled={committing}
               >
                 {committing ? 'Committing...' : 'Commit'}
               </button>

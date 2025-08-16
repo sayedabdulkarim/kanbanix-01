@@ -83,8 +83,18 @@ export async function POST(request: NextRequest) {
       auth: session.accessToken,
     });
 
+    // Get the last commit message to use as PR title if not provided
+    let lastCommitMessage = '';
+    try {
+      const commitInfo = await gitService.getLastCommit(workspacePath);
+      lastCommitMessage = commitInfo.message;
+    } catch (e) {
+      console.log('Could not get last commit message');
+    }
+
     // Generate PR title and description
-    const prTitle = title || (task ? `feat: ${task.title}` : `feat: ${branchInfo.current}`);
+    // Use provided title, or last commit message, or fallback to task title
+    const prTitle = title || lastCommitMessage || (task ? `feat: ${task.title}` : `feat: ${branchInfo.current}`);
     const prDescription = description || (task ? 
       `## Summary\n${task.description || 'Task implementation'}\n\n## Task Details\n- Task ID: ${task.id}\n- Created by: AI Agent\n- Branch: ${branchInfo.current}\n\n## Changes\nThis PR includes AI-generated code for the task implementation.` 
       : `## Summary\nChanges from branch ${branchInfo.current}\n\n## Description\n${description || 'Please add a description'}`);
