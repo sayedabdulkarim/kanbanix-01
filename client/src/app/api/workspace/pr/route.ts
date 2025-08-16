@@ -85,19 +85,45 @@ export async function POST(request: NextRequest) {
 
     // Get the last commit message to use as PR title if not provided
     let lastCommitMessage = '';
+    let lastCommitBody = '';
     try {
       const commitInfo = await gitService.getLastCommit(workspacePath);
-      lastCommitMessage = commitInfo.message;
+      // Split commit message into title (first line) and body (rest)
+      const commitLines = commitInfo.message.split('\n');
+      lastCommitMessage = commitLines[0].trim();
+      // Get the body (everything after the first line)
+      if (commitLines.length > 1) {
+        lastCommitBody = commitLines.slice(1).join('\n').trim();
+      }
     } catch (e) {
       console.log('Could not get last commit message');
     }
 
     // Generate PR title and description
-    // Use provided title, or last commit message, or fallback to task title
+    // Use provided title, or first line of last commit message, or fallback to task title
     const prTitle = title || lastCommitMessage || (task ? `feat: ${task.title}` : `feat: ${branchInfo.current}`);
-    const prDescription = description || (task ? 
-      `## Summary\n${task.description || 'Task implementation'}\n\n## Task Details\n- Task ID: ${task.id}\n- Created by: AI Agent\n- Branch: ${branchInfo.current}\n\n## Changes\nThis PR includes AI-generated code for the task implementation.` 
-      : `## Summary\nChanges from branch ${branchInfo.current}\n\n## Description\n${description || 'Please add a description'}`);
+    
+    // Build PR description including commit body if available
+    let prDescription = description;
+    if (!prDescription && task) {
+      prDescription = `## Summary\n${task.description || 'Task implementation'}`;
+      
+      // Include commit body if it exists
+      if (lastCommitBody) {
+        prDescription += `\n\n${lastCommitBody}`;
+      }
+      
+      prDescription += `\n\n## Task Details\n- Task ID: ${task.id}\n- Created by: AI Agent\n- Branch: ${branchInfo.current}\n\n## Changes\nThis PR includes AI-generated code for the task implementation.`;
+    } else if (!prDescription) {
+      prDescription = `## Summary\nChanges from branch ${branchInfo.current}`;
+      
+      // Include commit body if it exists
+      if (lastCommitBody) {
+        prDescription += `\n\n${lastCommitBody}`;
+      }
+      
+      prDescription += `\n\n## Description\n${description || 'Please add a description'}`;
+    }
 
     try {
       const { data: pr } = await octokit.pulls.create({

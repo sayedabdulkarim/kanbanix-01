@@ -337,18 +337,21 @@ class GitService {
    */
   async getLastCommit(workspacePath: string): Promise<GitCommitInfo> {
     try {
+      // Use a delimiter that's unlikely to appear in commit messages
+      const delimiter = '|||DELIMITER|||';
+      // Use %B to get the full commit message (subject + body)
       const { stdout } = await execAsync(
-        'git log -1 --format="%H|%s|%an|%ai"',
+        `git log -1 --format="%H${delimiter}%B${delimiter}%an${delimiter}%ai"`,
         { cwd: workspacePath }
       );
       
-      const [hash, message, author, date] = stdout.trim().split('|');
+      const [hash, message, author, date] = stdout.trim().split(delimiter);
       
       return {
-        hash,
-        message,
-        author,
-        date: new Date(date)
+        hash: hash.trim(),
+        message: message.trim(),
+        author: author.trim(),
+        date: new Date(date.trim())
       };
     } catch (error) {
       console.error('Error getting last commit:', error);

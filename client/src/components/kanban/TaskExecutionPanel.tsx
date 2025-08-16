@@ -496,10 +496,13 @@ export default function TaskExecutionPanel({
                     </button>
                     {/* Tooltip for disabled state */}
                     {!isCommitted && (
-                      <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 text-xs bg-popover text-popover-foreground rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                      <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 text-xs bg-gray-800/95 text-white rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap">
                         <div className="text-center">
                           <div className="font-medium mb-1">Commit changes first</div>
-                          <div className="text-muted-foreground">Go to Diffs tab → Click Commit button</div>
+                          <div className="text-gray-300">Go to Diffs tab → Click Commit button</div>
+                        </div>
+                        <div className="absolute top-full left-1/2 transform -translate-x-1/2 -mt-px">
+                          <div className="border-4 border-transparent border-t-gray-800/95"></div>
                         </div>
                       </div>
                     )}
