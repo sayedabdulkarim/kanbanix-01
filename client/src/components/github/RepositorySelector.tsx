@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Search, Star, GitFork, Lock, Unlock, Calendar, Github, Loader2 } from 'lucide-react';
 import { useSession } from 'next-auth/react';
+import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
 
 interface Repository {
   id: number;
@@ -44,7 +45,7 @@ export default function RepositorySelector({ onSelectRepository, onClose }: Repo
       setLoading(true);
       setError(null);
       
-      const response = await fetch('/api/github/repos');
+      const response = await apiFetch(API_ENDPOINTS.github.repos);
       if (!response.ok) {
         throw new Error('Failed to fetch repositories');
       }
@@ -69,11 +70,8 @@ export default function RepositorySelector({ onSelectRepository, onClose }: Repo
     setImporting(repo.id);
     
     try {
-      const response = await fetch('/api/github/import-repo', {
+      const response = await apiFetch(API_ENDPOINTS.github.importRepo, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({
           repoId: repo.id,
           repoName: repo.fullName,

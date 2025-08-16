@@ -6,6 +6,7 @@ import { ArrowLeft, Plus, Loader2, RefreshCw, GitBranch } from 'lucide-react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import workspaceService from '@/lib/services/workspaceService';
+import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
 import {
   DndContext,
   DragEndEvent,
@@ -180,7 +181,7 @@ export default function ProjectBoard() {
 
   const fetchProject = async () => {
     try {
-      const response = await fetch(`/api/projects/${params.projectId}`);
+      const response = await apiFetch(API_ENDPOINTS.projects.get(params.projectId));
       
       if (!response.ok) {
         if (response.status === 404) {
@@ -232,7 +233,7 @@ export default function ProjectBoard() {
 
   const pollExecutionStatus = async (taskId: string) => {
     try {
-      const response = await fetch(`/api/tasks/${taskId}/execution`);
+      const response = await apiFetch(API_ENDPOINTS.tasks.execution(taskId));
       if (response.ok) {
         const execution = await response.json();
         setTaskExecutions(prev => ({ ...prev, [taskId]: execution }));
@@ -278,11 +279,8 @@ export default function ProjectBoard() {
         }
       }
       
-      const response = await fetch(`/api/tasks/${taskId}`, {
+      const response = await apiFetch(API_ENDPOINTS.tasks.update(taskId), {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({
           columnId: newColumnId,
           status: newStatus,
@@ -401,7 +399,7 @@ export default function ProjectBoard() {
     try {
       if (selectedTask) {
         // Update existing task
-        const response = await fetch(`/api/tasks/${selectedTask.id}`, {
+        const response = await apiFetch(API_ENDPOINTS.tasks.update(selectedTask.id), {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -424,7 +422,7 @@ export default function ProjectBoard() {
         }
       } else {
         // Create new task
-        const response = await fetch('/api/tasks', {
+        const response = await apiFetch(API_ENDPOINTS.tasks.create, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -455,7 +453,7 @@ export default function ProjectBoard() {
   const handleDeleteTask = async (taskId: string) => {
     if (confirm('Are you sure you want to delete this task?')) {
       try {
-        const response = await fetch(`/api/tasks/${taskId}`, {
+        const response = await apiFetch(API_ENDPOINTS.tasks.update(taskId), {
           method: 'DELETE',
         });
 
@@ -480,11 +478,8 @@ export default function ProjectBoard() {
 
   const handleUpdateTaskFromDetails = async (taskId: string, updates: Partial<Task>) => {
     try {
-      const response = await fetch(`/api/tasks/${taskId}`, {
+      const response = await apiFetch(API_ENDPOINTS.tasks.update(taskId), {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify(updates),
       });
 

@@ -9,6 +9,7 @@ import {
 import { format } from 'date-fns';
 import { useExecutionSocket } from '@/lib/socket/useSocket';
 import DiffViewer from './DiffViewer';
+import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
 
 interface TaskExecution {
   id: string;
@@ -119,7 +120,7 @@ export default function TaskExecutionPanel({
   const fetchExecution = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/tasks/${task.id}/execution`);
+      const response = await apiFetch(API_ENDPOINTS.tasks.execution(task.id));
       if (response.ok) {
         const data = await response.json();
         console.log('Fetched execution with changes:', data.changes?.length || 0);
@@ -135,7 +136,7 @@ export default function TaskExecutionPanel({
 
   const fetchBranchInfo = async () => {
     try {
-      const response = await fetch(`/api/workspace/status?projectId=${projectId}`);
+      const response = await apiFetch(`${API_ENDPOINTS.workspace.status}?projectId=${projectId}`);
       if (response.ok) {
         const data = await response.json();
         setBranchInfo(data.workspace?.git);
@@ -152,9 +153,8 @@ export default function TaskExecutionPanel({
     
     setSyncing(true);
     try {
-      const response = await fetch('/api/workspace/sync-pr', {
+      const response = await apiFetch(API_ENDPOINTS.workspace.syncPr, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectId,
           taskId: task.id,
@@ -190,9 +190,8 @@ export default function TaskExecutionPanel({
     
     setCreatingPR(true);
     try {
-      const response = await fetch('/api/workspace/pr', {
+      const response = await apiFetch(API_ENDPOINTS.workspace.pr, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectId,
           taskId: task.id,
@@ -261,9 +260,8 @@ export default function TaskExecutionPanel({
         ? `feat: ${task.title}\n\n${commitMessage.trim()}`
         : `feat: ${task.title}`;
       
-      const response = await fetch('/api/workspace/commit', {
+      const response = await apiFetch(API_ENDPOINTS.workspace.commit, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectId,
           taskId: task.id,

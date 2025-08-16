@@ -7,6 +7,7 @@ import ProjectCard from '@/components/projects/ProjectCard';
 import CreateProjectModal from '@/components/projects/CreateProjectModal';
 import RepositorySelector from '@/components/github/RepositorySelector';
 import { cn } from '@/lib/utils/cn';
+import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
 
 // Landing page component for unauthenticated users
 function LandingPage() {
@@ -110,7 +111,7 @@ function Dashboard() {
       // First, sync with GitHub to check if repos still exist (unless skipped)
       if (!skipSync) {
         try {
-          const syncResponse = await fetch('/api/projects/sync-repos', {
+          const syncResponse = await apiFetch(API_ENDPOINTS.projects.syncRepos, {
             method: 'POST',
           });
           if (syncResponse.ok) {
@@ -126,7 +127,7 @@ function Dashboard() {
       }
       
       // Now fetch the updated project list
-      const response = await fetch('/api/projects');
+      const response = await apiFetch(API_ENDPOINTS.projects.list);
       if (response.ok) {
         const data = await response.json();
         setProjects(data);
@@ -141,7 +142,7 @@ function Dashboard() {
   const handleManualSync = async () => {
     setSyncing(true);
     try {
-      const syncResponse = await fetch('/api/projects/sync-repos', {
+      const syncResponse = await apiFetch(API_ENDPOINTS.projects.syncRepos, {
         method: 'POST',
       });
       if (syncResponse.ok) {
@@ -180,7 +181,7 @@ function Dashboard() {
     try {
       setIsCreateModalOpen(false);
       
-      const response = await fetch('/api/projects', {
+      const response = await apiFetch(API_ENDPOINTS.projects.create, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -215,7 +216,7 @@ function Dashboard() {
   const handleDeleteProject = async (id: string) => {
     if (confirm('Are you sure you want to delete this project?')) {
       try {
-        const response = await fetch(`/api/projects?id=${id}`, {
+        const response = await apiFetch(`${API_ENDPOINTS.projects.list}?id=${id}`, {
           method: 'DELETE',
         });
         

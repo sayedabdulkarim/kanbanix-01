@@ -1,6 +1,8 @@
 // Workspace Management Service
 // Handles cloning, cleanup, and status tracking for temporary workspaces
 
+import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
+
 export interface WorkspaceStatus {
   projectId: string;
   projectName: string;
@@ -52,11 +54,8 @@ class WorkspaceService {
   // Enter a project workspace (clone repository)
   async enterWorkspace(projectId: string): Promise<WorkspaceEnterResult> {
     try {
-      const response = await fetch('/api/workspace/enter', {
+      const response = await apiFetch(API_ENDPOINTS.workspace.enter, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({ projectId }),
       });
 
@@ -93,11 +92,8 @@ class WorkspaceService {
     }
 
     try {
-      const response = await fetch('/api/workspace/leave', {
+      const response = await apiFetch(API_ENDPOINTS.workspace.leave, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({ projectId: targetProjectId }),
       });
 
@@ -129,7 +125,7 @@ class WorkspaceService {
   // Get workspace status
   async getWorkspaceStatus(projectId: string): Promise<WorkspaceStatus> {
     try {
-      const response = await fetch(`/api/workspace/status?projectId=${projectId}`, {
+      const response = await apiFetch(`${API_ENDPOINTS.workspace.status}?projectId=${projectId}`, {
         method: 'GET',
       });
 
@@ -148,11 +144,8 @@ class WorkspaceService {
   // Refresh workspace (pull latest changes)
   async refreshWorkspace(projectId: string, discardChanges: boolean = false): Promise<any> {
     try {
-      const response = await fetch('/api/workspace/refresh', {
+      const response = await apiFetch(API_ENDPOINTS.workspace.refresh, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({ projectId, discardChanges }),
       });
 

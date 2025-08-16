@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import io, { Socket } from 'socket.io-client';
+import { getWebSocketUrl } from '@/lib/config/api';
 
 let socket: Socket | null = null;
 
@@ -12,7 +13,8 @@ export function useSocket() {
   useEffect(() => {
     // Initialize socket connection
     if (!socket) {
-      socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3000', {
+      const wsUrl = process.env.NEXT_PUBLIC_SOCKET_URL || getWebSocketUrl() || 'http://localhost:3000';
+      socket = io(wsUrl, {
         path: '/api/socket',
         transports: ['websocket', 'polling']
       });

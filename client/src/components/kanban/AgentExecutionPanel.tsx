@@ -5,6 +5,7 @@ import { X, Terminal, CheckCircle, XCircle, Loader2, Clock, FileCode, GitCommit,
 import { format } from 'date-fns';
 import { useExecutionSocket } from '@/lib/socket/useSocket';
 import DiffViewer from './DiffViewer';
+import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
 
 interface AgentExecution {
   id: string;
@@ -87,7 +88,7 @@ export default function AgentExecutionPanel({ taskId, projectId, onClose, repoUr
   const fetchInitialExecution = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/tasks/${taskId}/execution`);
+      const response = await apiFetch(API_ENDPOINTS.tasks.execution(taskId));
       if (response.ok) {
         const data = await response.json();
         setExecution(data);
@@ -103,7 +104,7 @@ export default function AgentExecutionPanel({ taskId, projectId, onClose, repoUr
   const fetchBranchInfo = async () => {
     if (!projectId) return;
     try {
-      const response = await fetch(`/api/workspace/status?projectId=${projectId}`);
+      const response = await apiFetch(`${API_ENDPOINTS.workspace.status}?projectId=${projectId}`);
       if (response.ok) {
         const data = await response.json();
         setBranchInfo(data.workspace?.git);
@@ -150,9 +151,8 @@ export default function AgentExecutionPanel({ taskId, projectId, onClose, repoUr
     setCommitting(true);
     try {
       // First commit
-      const commitResponse = await fetch('/api/workspace/commit', {
+      const commitResponse = await apiFetch(API_ENDPOINTS.workspace.commit, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectId,
           taskId,
@@ -166,9 +166,8 @@ export default function AgentExecutionPanel({ taskId, projectId, onClose, repoUr
         
         // Then push if requested
         if (pushAfterCommit) {
-          const pushResponse = await fetch('/api/workspace/push', {
+          const pushResponse = await apiFetch(API_ENDPOINTS.workspace.push, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               projectId,
               branch: branchInfo?.branch
