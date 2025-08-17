@@ -589,11 +589,26 @@ export default function TaskExecutionPanel({
                       )}
                     </button>
                     {/* Tooltip for disabled state */}
-                    {!isCommitted && (
+                    {(creatingPR || !branchInfo?.branch || branchInfo?.branch === 'main' || !isCommitted) && (
                       <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 text-xs bg-gray-800/95 text-white rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap">
                         <div className="text-center">
-                          <div className="font-medium mb-1">Commit changes first</div>
-                          <div className="text-gray-300">Go to Diffs tab → Click Commit button</div>
+                          {creatingPR ? (
+                            <div className="font-medium">Creating pull request...</div>
+                          ) : !isCommitted ? (
+                            <>
+                              <div className="font-medium mb-1">Commit changes first</div>
+                              <div className="text-gray-300">Go to Diffs tab → Click Commit button</div>
+                            </>
+                          ) : branchInfo?.branch === 'main' ? (
+                            <>
+                              <div className="font-medium mb-1">Cannot create PR from main branch</div>
+                              <div className="text-gray-300">Task needs its own feature branch</div>
+                            </>
+                          ) : !branchInfo?.branch ? (
+                            <div className="font-medium">No branch information available</div>
+                          ) : (
+                            <div className="font-medium">Cannot create pull request</div>
+                          )}
                         </div>
                         <div className="absolute top-full left-1/2 transform -translate-x-1/2 -mt-px">
                           <div className="border-4 border-transparent border-t-gray-800/95"></div>

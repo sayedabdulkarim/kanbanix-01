@@ -21,14 +21,17 @@ class GitService {
    * Create a branch name from task title
    */
   createBranchName(taskId: string, taskTitle: string): string {
-    // Create a URL-safe branch name
+    // Create a URL-safe branch name with timestamp for uniqueness
     const slug = taskTitle
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
-      .substring(0, 50);
+      .substring(0, 30); // Reduced to make room for timestamp
     
-    return `task/${taskId.substring(0, 8)}-${slug}`;
+    // Add timestamp to ensure uniqueness (last 6 digits of timestamp)
+    const timestamp = Date.now().toString().slice(-6);
+    
+    return `task/${taskId.substring(0, 8)}-${slug}-${timestamp}`;
   }
 
   /**
@@ -39,9 +42,8 @@ class GitService {
     taskId: string, 
     taskTitle: string
   ): Promise<string> {
-    const baseBranchName = this.createBranchName(taskId, taskTitle);
-    let branchName = baseBranchName;
-    let attempt = 1;
+    // Branch name is now unique by default due to timestamp
+    const branchName = this.createBranchName(taskId, taskTitle);
     
     try {
       // Clean up any git lock files first
@@ -49,62 +51,6 @@ class GitService {
         await execAsync('rm -f .git/index.lock', { cwd: workspacePath });
       } catch (e) {
         // Ignore if file doesn't exist
-      }
-      
-      // Get current branch
-      let currentBranch = '';
-      try {
-        const result = await execAsync('git branch --show-current', { 
-          cwd: workspacePath 
-        });
-        currentBranch = result.stdout;
-      } catch (e) {
-        console.log('Could not get current branch, assuming we need to create new one');
-      }
-      
-      // Find a unique branch name
-      while (attempt <= 10) {
-        // Check if branch exists locally or remotely
-        let branchExists = false;
-        
-        // Check local branches
-        try {
-          await execAsync(`git rev-parse --verify ${branchName}`, { 
-            cwd: workspacePath 
-          });
-          branchExists = true;
-        } catch (e) {
-          // Branch doesn't exist locally
-        }
-        
-        // Check remote branches
-        if (!branchExists) {
-          try {
-            const { stdout } = await execAsync(
-              `git ls-remote --heads origin ${branchName}`, 
-              { cwd: workspacePath }
-            );
-            if (stdout.trim()) {
-              branchExists = true;
-            }
-          } catch (e) {
-            // Branch doesn't exist remotely
-          }
-        }
-        
-        if (!branchExists) {
-          // Found a unique branch name
-          break;
-        }
-        
-        // Branch exists, try with version number
-        attempt++;
-        branchName = `${baseBranchName}-v${attempt}`;
-        console.log(`Branch exists, trying: ${branchName}`);
-      }
-      
-      if (attempt > 10) {
-        throw new Error('Could not create unique branch name after 10 attempts');
       }
       
       // Branch doesn't exist, create it

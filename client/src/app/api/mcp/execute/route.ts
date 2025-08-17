@@ -145,16 +145,35 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
         // Look for the actual tool response in the output
         const lines = output.split('\n');
         for (const line of lines) {
-          if (line.includes('"content"') && !responseReceived) {
-            // Extract the content from MCP response
-            const match = line.match(/"text"\s*:\s*"(.*)"/);
-            if (match) {
-              const text = match[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
-              try {
-                const result = JSON.parse(text);
-                
-                // Use changes from the result if provided, otherwise detect
-                let changes = result.changes || [];
+          if (line.includes('"result"') && line.includes('"content"') && !responseReceived) {
+            try {
+              // First try to parse the entire line as JSON (MCP response format)
+              const parsed = JSON.parse(line);
+              if (parsed.result && parsed.result.content && parsed.result.content[0]) {
+                const contentItem = parsed.result.content[0];
+                if (contentItem.type === 'text' && contentItem.text) {
+                  // Now parse the text content which contains our actual result
+                  const result = JSON.parse(contentItem.text);
+                  
+                  // Use changes from the result if provided
+                  let changes = result.changes || [];
+                  console.log('Parsed MCP result with', changes.length, 'changes');
+                  
+                  responseReceived = true;
+                  resolve({ ...result, changes });
+                  continue;
+                }
+              }
+            } catch (parseError) {
+              // Fallback to regex extraction if direct parsing fails
+              const match = line.match(/"text"\s*:\s*"(.*)"/);
+              if (match) {
+                const text = match[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
+                try {
+                  const result = JSON.parse(text);
+                  
+                  // Use changes from the result if provided, otherwise detect
+                  let changes = result.changes || [];
                 
                 // If no changes in result, detect file changes
                 if (!changes.length && fs.existsSync(workspacePath)) {
@@ -179,40 +198,41 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
                   });
                 }
                 
-                responseReceived = true;
-                resolve({ ...result, changes });
-              } catch (e) {
-                // If not JSON, detect file changes and return
-                const changes: any[] = [];
-                if (fs.existsSync(workspacePath)) {
-                  const getAllFiles = (dir: string, fileList: string[] = []): string[] => {
-                    const files = fs.readdirSync(dir);
-                    files.forEach((file: string) => {
-                      const filePath = path.join(dir, file);
-                      if (fs.statSync(filePath).isDirectory() && !file.startsWith('.') && file !== 'node_modules') {
-                        getAllFiles(filePath, fileList);
-                      } else if (!file.startsWith('.')) {
-                        fileList.push(path.relative(workspacePath, filePath));
+                  responseReceived = true;
+                  resolve({ ...result, changes });
+                } catch (e) {
+                  // If not JSON, detect file changes and return
+                  const changes: any[] = [];
+                  if (fs.existsSync(workspacePath)) {
+                    const getAllFiles = (dir: string, fileList: string[] = []): string[] => {
+                      const files = fs.readdirSync(dir);
+                      files.forEach((file: string) => {
+                        const filePath = path.join(dir, file);
+                        if (fs.statSync(filePath).isDirectory() && !file.startsWith('.') && file !== 'node_modules') {
+                          getAllFiles(filePath, fileList);
+                        } else if (!file.startsWith('.')) {
+                          fileList.push(path.relative(workspacePath, filePath));
+                        }
+                      });
+                      return fileList;
+                    };
+                    const afterFiles = new Set(getAllFiles(workspacePath));
+                    
+                    afterFiles.forEach((file: string) => {
+                      if (!beforeFiles.has(file)) {
+                        changes.push({ path: file, type: 'created' });
                       }
                     });
-                    return fileList;
-                  };
-                  const afterFiles = new Set(getAllFiles(workspacePath));
+                  }
                   
-                  afterFiles.forEach((file: string) => {
-                    if (!beforeFiles.has(file)) {
-                      changes.push({ path: file, type: 'created' });
-                    }
+                  responseReceived = true;
+                  resolve({ 
+                    success: true, 
+                    message: text,
+                    summary: `Generated code for task`,
+                    changes
                   });
                 }
-                
-                responseReceived = true;
-                resolve({ 
-                  success: true, 
-                  message: text,
-                  summary: `Generated code for task`,
-                  changes
-                });
               }
             }
           }
