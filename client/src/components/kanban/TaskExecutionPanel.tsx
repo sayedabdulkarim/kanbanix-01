@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { 
   X, Terminal, CheckCircle, XCircle, Loader2, Clock, 
   GitBranch, GitPullRequest, ExternalLink, ChevronRight,
@@ -68,10 +68,94 @@ export default function TaskExecutionPanel({
   const [commitStatus, setCommitStatus] = useState<{ type: 'success' | 'error' | null; message: string }>({ type: null, message: '' });
   const [prCreated, setPrCreated] = useState(false);
   const [prUrl, setPrUrl] = useState<string | null>(null);
+  const [devServerUrl, setDevServerUrl] = useState<string | null>(null);
+  const [devServerStatus, setDevServerStatus] = useState<'stopped' | 'starting' | 'running' | 'error'>('stopped');
+  const [devServerStarted, setDevServerStarted] = useState(false);
+  const [shouldStartDevServer, setShouldStartDevServer] = useState(false);
 
   // WebSocket for real-time updates
   const { execution: socketExecution, logs: socketLogs } = useExecutionSocket(execution?.id || null);
 
+  const fetchExecution = async () => {
+    try {
+      setLoading(true);
+      const response = await apiFetch(API_ENDPOINTS.tasks.execution(task.id));
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Fetched execution with changes:', data.changes?.length || 0);
+        setExecution(data);
+        
+        // Check if execution has dev server URL in summary
+        if (data.summary) {
+          const urlMatch = data.summary.match(/\[DEV_SERVER_URL\](.*?)\[\/DEV_SERVER_URL\]/);
+          if (urlMatch) {
+            setDevServerUrl(urlMatch[1]);
+            setDevServerStatus('pending');
+          }
+        }
+        
+        // If execution completed and has changes, try to start dev server
+        if (data.status === 'completed' && data.changes && data.changes.length > 0 && !devServerStarted) {
+          console.log('Execution completed, should start dev server...');
+          setShouldStartDevServer(true);
+        }
+        // Don't auto-switch tabs anymore to prevent re-renders
+      }
+    } catch (error) {
+      console.error('Error fetching execution:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Define startDevServerForProject first, before any useEffect that uses it
+  const startDevServerForProject = useCallback(async () => {
+    if (!projectId || devServerStatus === 'running' || devServerStatus === 'starting' || devServerStarted) return;
+    
+    try {
+      setDevServerStatus('starting');
+      setDevServerStarted(true);
+      const response = await apiFetch(API_ENDPOINTS.workspace.devServer, {
+        method: 'POST',
+        body: JSON.stringify({ 
+          projectId, 
+          taskId: task.id,
+          executionId: execution?.id 
+        })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.url) {
+          setDevServerUrl(data.url);
+          setDevServerStatus('running');
+          console.log('Dev server started at:', data.url);
+        }
+      } else {
+        console.error('Failed to start dev server');
+        setDevServerStatus('error');
+      }
+    } catch (error) {
+      console.error('Error starting dev server:', error);
+      setDevServerStatus('error');
+    }
+  }, [projectId, devServerStatus, task.id, execution?.id, devServerStarted]);
+
+  const fetchBranchInfo = async () => {
+    try {
+      const response = await apiFetch(`${API_ENDPOINTS.workspace.status}?projectId=${projectId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setBranchInfo(data.workspace?.git);
+      }
+    } catch (error) {
+      console.error('Error fetching branch info:', error);
+    }
+  };
+
+  const [creatingPR, setCreatingPR] = useState(false);
+
+  // All useEffects after function definitions
   useEffect(() => {
     if (task?.id) {
       fetchExecution();
@@ -100,9 +184,52 @@ export default function TaskExecutionPanel({
         ...socketExecution,
         logs: socketLogs || prev?.logs || []
       }));
+      
+      // Check if execution just completed and we haven't started dev server yet
+      if (socketExecution.status === 'completed' && !devServerStarted && socketExecution.changes?.length > 0) {
+        console.log('Execution completed via socket, should start dev server...');
+        setShouldStartDevServer(true);
+      }
+      
+      // Check for dev server URL in summary (just for display, don't start again)
+      if (socketExecution.summary) {
+        const urlMatch = socketExecution.summary.match(/\[DEV_SERVER_URL\](.*?)\[\/DEV_SERVER_URL\]/);
+        if (urlMatch && urlMatch[1] === 'pending') {
+          // Dev server should be started, just mark status
+          if (!devServerStarted) {
+            setShouldStartDevServer(true);
+          }
+        }
+      }
     }
-  }, [socketExecution, socketLogs]);
+    
+    // Also check logs for dev server messages
+    if (socketLogs && socketLogs.length > 0) {
+      const lastLog = socketLogs[socketLogs.length - 1];
+      if (lastLog.message?.includes('Dev server ready at')) {
+        // This log comes from the dev-server route with the actual URL
+        const urlMatch = lastLog.message.match(/http:\/\/localhost:\d+/);
+        if (urlMatch) {
+          setDevServerUrl(urlMatch[0]);
+          setDevServerStatus('running');
+        }
+      } else if (lastLog.message?.includes('Starting development server')) {
+        setDevServerStatus('starting');
+      } else if (lastLog.message?.includes('Code generation completed') && !devServerStarted) {
+        // Start dev server when code generation completes
+        setShouldStartDevServer(true);
+      }
+    }
+  }, [socketExecution, socketLogs, devServerStarted]);
   
+  // Handle dev server start when flag is set
+  useEffect(() => {
+    if (shouldStartDevServer && !devServerStarted) {
+      setShouldStartDevServer(false);
+      startDevServerForProject();
+    }
+  }, [shouldStartDevServer, devServerStarted, startDevServerForProject]);
+
   // Re-fetch execution when status changes to completed to get changes
   useEffect(() => {
     if (execution?.status === 'completed' && (!execution.changes || execution.changes.length === 0)) {
@@ -116,37 +243,6 @@ export default function TaskExecutionPanel({
       fetchBranchInfo();
     }
   }, [execution?.status, projectId]);
-
-  const fetchExecution = async () => {
-    try {
-      setLoading(true);
-      const response = await apiFetch(API_ENDPOINTS.tasks.execution(task.id));
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Fetched execution with changes:', data.changes?.length || 0);
-        setExecution(data);
-        // Don't auto-switch tabs anymore to prevent re-renders
-      }
-    } catch (error) {
-      console.error('Error fetching execution:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchBranchInfo = async () => {
-    try {
-      const response = await apiFetch(`${API_ENDPOINTS.workspace.status}?projectId=${projectId}`);
-      if (response.ok) {
-        const data = await response.json();
-        setBranchInfo(data.workspace?.git);
-      }
-    } catch (error) {
-      console.error('Error fetching branch info:', error);
-    }
-  };
-
-  const [creatingPR, setCreatingPR] = useState(false);
   
   const handleSyncPR = async () => {
     if (!projectId || !task?.id) return;
@@ -529,9 +625,52 @@ export default function TaskExecutionPanel({
         
         {devServerExpanded && (
           <div className="px-4 pb-3">
-            <div className="bg-muted rounded p-3 font-mono text-xs">
-              <div>Starting development server...</div>
-              <div className="text-green-500">✓ Server running on http://localhost:3000</div>
+            <div className="bg-muted rounded p-3">
+              {devServerUrl ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className={`h-2 w-2 rounded-full ${
+                      devServerStatus === 'running' ? 'bg-green-500 animate-pulse' : 
+                      devServerStatus === 'starting' ? 'bg-yellow-500 animate-pulse' :
+                      devServerStatus === 'error' ? 'bg-red-500' : 'bg-gray-500'
+                    }`} />
+                    <span className="text-sm font-medium">
+                      {devServerStatus === 'running' ? 'Dev Server Running' :
+                       devServerStatus === 'starting' ? 'Starting Server...' :
+                       devServerStatus === 'error' ? 'Server Error' : 'Server Stopped'}
+                    </span>
+                  </div>
+                  {devServerStatus === 'running' && (
+                    <div className="flex items-center justify-between">
+                      <a
+                        href={devServerUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-500 hover:text-blue-400 flex items-center gap-2 font-mono text-sm"
+                      >
+                        {devServerUrl}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                      <button
+                        onClick={async () => {
+                          // Optional: Add stop server functionality
+                          setDevServerStatus('stopped');
+                          setDevServerUrl(null);
+                        }}
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        Stop
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">
+                  {execution?.status === 'running' ? 
+                    'Dev server will start after code generation...' : 
+                    'No dev server running'}
+                </div>
+              )}
             </div>
           </div>
         )}

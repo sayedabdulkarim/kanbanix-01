@@ -60,7 +60,10 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
     
     // Track files for change detection
     const fs = require('fs');
+    const { PrismaClient } = require('@prisma/client');
+    const prisma = new PrismaClient();
     const workspacePath = params.workspacePath || path.join(process.cwd(), 'projects', params.projectId);
+    const executionId = params.executionId;
     let beforeFiles: Set<string> = new Set();
     
     // Get list of files before execution
@@ -95,10 +98,47 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
     let responseReceived = false;
 
     // Handle stdout
-    mcpProcess.stdout.on('data', (data) => {
+    mcpProcess.stdout.on('data', async (data) => {
       const chunk = data.toString();
       console.log('MCP stdout:', chunk);
       output += chunk;
+      
+      // Stream logs to execution if executionId provided
+      if (executionId) {
+        // Parse and log meaningful messages
+        const lines = chunk.split('\n').filter(line => line.trim());
+        for (const line of lines) {
+          // Skip JSON-RPC protocol messages
+          if (line.includes('jsonrpc') || line.includes('"id"') || line.includes('"method"')) {
+            continue;
+          }
+          
+          // Log installation progress
+          if (line.includes('npm install') || line.includes('Installing') || 
+              line.includes('added') || line.includes('packages')) {
+            await prisma.agentLog.create({
+              data: {
+                executionId,
+                level: 'info',
+                message: line.trim(),
+                metadata: null
+              }
+            }).catch((e: any) => console.error('Failed to log:', e));
+          }
+          // Log file operations
+          else if (line.includes('Creating') || line.includes('Writing') || 
+                   line.includes('Generated') || line.includes('Created')) {
+            await prisma.agentLog.create({
+              data: {
+                executionId,
+                level: 'info',
+                message: line.trim(),
+                metadata: null
+              }
+            }).catch((e: any) => console.error('Failed to log:', e));
+          }
+        }
+      }
       
       // Try to parse response
       try {

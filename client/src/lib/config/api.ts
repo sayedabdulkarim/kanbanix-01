@@ -72,6 +72,8 @@ export const API_ENDPOINTS = {
     file: api('/api/workspace/file'),
     pr: api('/api/workspace/pr'),
     syncPr: api('/api/workspace/sync-pr'),
+    devServer: api('/api/workspace/dev-server'),
+    build: api('/api/workspace/build'),
   },
 
   // GitHub endpoints
