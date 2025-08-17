@@ -655,27 +655,45 @@ export default function TaskExecutionPanel({
                        devServerStatus === 'error' ? 'Server Error' : 'Server Stopped'}
                     </span>
                   </div>
-                  {devServerStatus === 'running' && (
+                  {(devServerStatus === 'running' || devServerStatus === 'stopped') && (
                     <div className="flex items-center justify-between">
-                      <a
-                        href={devServerUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-500 hover:text-blue-400 flex items-center gap-2 font-mono text-sm"
-                      >
-                        {devServerUrl}
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                      <button
-                        onClick={async () => {
-                          // Optional: Add stop server functionality
-                          setDevServerStatus('stopped');
-                          setDevServerUrl(null);
-                        }}
-                        className="text-xs text-muted-foreground hover:text-foreground"
-                      >
-                        Stop
-                      </button>
+                      {devServerStatus === 'running' ? (
+                        <>
+                          <a
+                            href={devServerUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-500 hover:text-blue-400 flex items-center gap-2 font-mono text-sm"
+                          >
+                            {devServerUrl}
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                          <button
+                            onClick={async () => {
+                              // Stop the server
+                              setDevServerStatus('stopped');
+                              // Keep the URL for restart
+                            }}
+                            className="text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            Stop
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-sm text-muted-foreground">Server stopped</span>
+                          <button
+                            onClick={() => {
+                              // Restart the server
+                              setDevServerStarted(false);
+                              setShouldStartDevServer(true);
+                            }}
+                            className="text-xs px-2 py-1 border rounded hover:bg-secondary"
+                          >
+                            Restart
+                          </button>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
