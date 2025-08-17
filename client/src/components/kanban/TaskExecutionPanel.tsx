@@ -674,7 +674,7 @@ export default function TaskExecutionPanel({
                               setDevServerStatus('stopped');
                               // Keep the URL for restart
                             }}
-                            className="text-xs text-muted-foreground hover:text-foreground"
+                            className="text-xs px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
                           >
                             Stop
                           </button>
@@ -688,7 +688,7 @@ export default function TaskExecutionPanel({
                               setDevServerStarted(false);
                               setShouldStartDevServer(true);
                             }}
-                            className="text-xs px-2 py-1 border rounded hover:bg-secondary"
+                            className="text-xs px-2 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
                           >
                             Restart
                           </button>
