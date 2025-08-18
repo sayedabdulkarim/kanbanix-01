@@ -14,7 +14,9 @@
     "info": "node -e \"import('./src/config.js').then(c => console.log(JSON.stringify(c.mcpConfig, null, 2)))\""
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.60.0",
     "@modelcontextprotocol/sdk": "^0.6.0",
+    "dotenv": "^17.2.1",
     "glob": "^10.3.10",
     "simple-git": "^3.20.0"
   },

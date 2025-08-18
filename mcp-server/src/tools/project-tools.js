@@ -3,6 +3,11 @@ import path from 'path';
 import { spawn, exec as execCallback } from 'child_process';
 import { promisify } from 'util';
 import { getBoilerplateFiles, detectFramework } from '../templates/boilerplate-templates.js';
+import Anthropic from '@anthropic-ai/sdk';
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 const exec = promisify(execCallback);
 const PROJECT_ROOT = path.resolve(process.cwd(), '..');
@@ -249,7 +254,7 @@ export const projectTools = [
 
   {
     name: 'generate_task_code',
-    description: 'Generate code implementation for a task',
+    description: 'Generate code implementation for a task using AI',
     inputSchema: {
       type: 'object',
       properties: {
@@ -272,49 +277,29 @@ export const projectTools = [
       const changes = [];
       
       try {
-        // Use LLM to analyze intent instead of hardcoded keywords
-        console.log(`Analyzing task intent: "${task_title}"`);
-        
-        // Ask Claude to determine if this is a new project or feature request
-        const intentAnalysis = await analyzeTaskIntent(task_title, task_description);
-        console.log(`Intent analysis result: ${intentAnalysis.type}`);
-        
-        if (intentAnalysis.type !== 'NEW_PROJECT') {
-          // This is not a new project request, handle as feature addition
-          console.log('Task identified as feature request, not new project');
-          return JSON.stringify({
-            success: false,
-            summary: 'This appears to be a feature request, not a new project',
-            changes: [],
-            message: 'Use this tool only for creating new projects. For adding features to existing projects, the AI will generate code directly.',
-            intent: intentAnalysis
-          }, null, 2);
-        }
-        
-        // Check if we're in an existing project workspace that's essentially empty
+        // Get workspace path
         const workspacePath = context?.projectPath || context?.workspacePath || PROJECT_ROOT;
-        console.log(`Checking if project is empty at path: ${workspacePath}`);
+        console.log(`Working in project path: ${workspacePath}`);
+        
+        // Check if project is empty
         const isEmptyProject = await checkIfProjectIsEmpty(workspacePath);
         console.log(`Is empty project: ${isEmptyProject}`);
         
-        if (!isEmptyProject) {
-          console.log('Project already has code, cannot create boilerplate');
-          return JSON.stringify({
-            success: false,
-            summary: 'Project already has code',
-            changes: [],
-            message: 'Cannot create boilerplate in a project that already has code. This tool is only for empty projects or new project creation.',
-            intent: intentAnalysis
-          }, null, 2);
+        // Initialize Anthropic client
+        const anthropic = new Anthropic({
+          apiKey: process.env.ANTHROPIC_API_KEY
+        });
+        
+        if (!process.env.ANTHROPIC_API_KEY) {
+          throw new Error('ANTHROPIC_API_KEY not configured');
         }
         
-        console.log('Project is empty, proceeding with Next.js creation');
-        console.log(`Intent: ${intentAnalysis.type} (confidence: ${intentAnalysis.confidence}%)`);
-        console.log(`Reasoning: ${intentAnalysis.reasoning}`);
-        
-        // For empty projects, create Next.js app directly in the workspace
-        // Don't create a subdirectory since we're already in the project folder
-        const projectPath = workspacePath;
+        // If project is empty, create Next.js boilerplate first
+        if (isEmptyProject) {
+          console.log('Project is empty, creating Next.js boilerplate first...');
+          
+          // Create Next.js app in the empty project
+          const projectPath = workspacePath;
         const projectName = path.basename(projectPath); // Use the current folder name
         const projectDir = projectPath; // Use the workspace directly
         
@@ -462,14 +447,169 @@ export const projectTools = [
           ]
         }, null, 2);
         
+        } else {
+          // Project already has code - use AI to add feature intelligently
+          console.log('Project has existing code, using AI to add feature...');
+          
+          // Gather project context
+          const projectFiles = await fs.readdir(workspacePath);
+          let packageJson = null;
+          let mainFiles = [];
+          
+          // Read package.json if exists
+          try {
+            const pkgPath = path.join(workspacePath, 'package.json');
+            const pkgContent = await fs.readFile(pkgPath, 'utf-8');
+            packageJson = JSON.parse(pkgContent);
+          } catch (e) {
+            console.log('No package.json found');
+          }
+          
+          // Read some key files for context
+          const filesToCheck = ['src/app/page.tsx', 'src/app/page.js', 'pages/index.js', 'pages/index.tsx', 'index.html', 'src/App.js', 'src/App.tsx'];
+          for (const file of filesToCheck) {
+            try {
+              const content = await fs.readFile(path.join(workspacePath, file), 'utf-8');
+              mainFiles.push({ path: file, content: content.substring(0, 500) }); // First 500 chars
+            } catch (e) {
+              // File doesn't exist
+            }
+          }
+          
+          // Ask Claude to generate code for the existing project
+          console.log('Calling Claude API to generate feature code...');
+          const message = await anthropic.messages.create({
+            model: 'claude-3-5-sonnet-20241022', // Using the model from SynthAI
+            max_tokens: 4096,
+            temperature: 0.7,
+            messages: [{
+              role: 'user',
+              content: `Task: ${task_title}
+Description: ${task_description || 'No additional description'}
+
+Current project context:
+- Files in project: ${projectFiles.slice(0, 20).join(', ')}${projectFiles.length > 20 ? '...' : ''}
+- Package.json dependencies: ${packageJson ? Object.keys(packageJson.dependencies || {}).join(', ') : 'No package.json'}
+- Main files found: ${mainFiles.map(f => f.path).join(', ')}
+
+${mainFiles.length > 0 ? `Main file content preview:
+${mainFiles[0].path}:
+${mainFiles[0].content}` : ''}
+
+Please analyze this existing project and generate the code needed to implement the requested feature.
+Determine what framework is being used and follow its patterns.
+
+Return your response as a JSON object with this structure:
+{
+  "framework": "detected framework (nextjs, react, vue, angular, vanilla, etc.)",
+  "files": {
+    "/path/to/file.js": "file content here",
+    "/path/to/another.js": "more content"
+  },
+  "summary": "What was implemented",
+  "dependencies": ["any new npm packages needed"]
+}
+
+Important:
+- Use the existing project's patterns and structure
+- For Next.js App Router, put components in src/app or src/components
+- For Next.js Pages Router, put components in pages or components
+- For vanilla HTML/JS, modify the existing files
+- Include all necessary imports and exports
+- Make the code production-ready`
+            }]
+          });
+          
+          // Parse Claude's response
+          const responseText = message.content[0].text;
+          console.log('Claude response received, parsing...');
+          
+          let generatedCode;
+          try {
+            // Extract JSON from response
+            const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) {
+              throw new Error('No JSON found in Claude response');
+            }
+            generatedCode = JSON.parse(jsonMatch[0]);
+          } catch (parseError) {
+            console.error('Failed to parse Claude response:', parseError);
+            // Fallback - try to extract code blocks
+            generatedCode = {
+              framework: 'unknown',
+              files: {},
+              summary: 'Generated code for: ' + task_title,
+              dependencies: []
+            };
+            
+            // Try to extract code blocks from the response
+            const codeBlockRegex = /```(?:javascript|jsx|typescript|tsx|js|ts)?\n([\s\S]*?)```/g;
+            let match;
+            let fileIndex = 0;
+            while ((match = codeBlockRegex.exec(responseText)) !== null) {
+              const fileName = `/generated_file_${fileIndex}.js`;
+              generatedCode.files[fileName] = match[1];
+              fileIndex++;
+            }
+          }
+          
+          // Write the generated files to disk
+          const createdFiles = [];
+          for (const [filePath, content] of Object.entries(generatedCode.files)) {
+            const fullPath = path.join(workspacePath, filePath.startsWith('/') ? filePath.slice(1) : filePath);
+            
+            // Create directory if needed
+            const dir = path.dirname(fullPath);
+            await fs.mkdir(dir, { recursive: true });
+            
+            // Write file
+            await fs.writeFile(fullPath, content, 'utf-8');
+            console.log(`Created/Updated: ${filePath}`);
+            
+            createdFiles.push({
+              path: filePath,
+              type: 'created',
+              diff: { added: content.split('\n').length, removed: 0, hunks: [] }
+            });
+          }
+          
+          // Install dependencies if needed
+          if (generatedCode.dependencies && generatedCode.dependencies.length > 0) {
+            console.log(`Installing dependencies: ${generatedCode.dependencies.join(', ')}`);
+            const installer = packageJson?.packageManager?.includes('yarn') ? 'yarn' : 'npm';
+            const installCmd = installer === 'yarn' ? 'add' : 'install';
+            
+            try {
+              await exec(`${installer} ${installCmd} ${generatedCode.dependencies.join(' ')}`, {
+                cwd: workspacePath
+              });
+              console.log('Dependencies installed successfully');
+            } catch (installError) {
+              console.warn('Failed to install dependencies:', installError.message);
+            }
+          }
+          
+          return JSON.stringify({
+            success: true,
+            summary: generatedCode.summary || `Added ${task_title} to existing ${generatedCode.framework} project`,
+            changes: createdFiles,
+            message: `Successfully added feature to existing project`,
+            framework: generatedCode.framework,
+            filesCreated: Object.keys(generatedCode.files).length,
+            dependencies: generatedCode.dependencies || []
+          }, null, 2);
+        }
+        
       } catch (error) {
-        console.error('Error creating Next.js app:', error);
+        console.error('Error in generate_task_code:', error);
         return JSON.stringify({
           success: false,
-          summary: 'Error creating Next.js app',
+          summary: 'Error generating code',
           changes: [],
           message: error.message,
-          hint: 'Make sure you have Node.js and npm installed'
+          hint: error.message.includes('ANTHROPIC_API_KEY') ? 
+            'Make sure ANTHROPIC_API_KEY is set in .env file' : 
+            'Check logs for details'
         }, null, 2);
       }
     },
