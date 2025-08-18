@@ -79,6 +79,55 @@ export async function POST(request: NextRequest) {
         error: 'No package.json found. Is the project initialized?' 
       }, { status: 400 });
     }
+    
+    // Check if node_modules exists, if not install dependencies first
+    try {
+      await fs.access(path.join(workspacePath, 'node_modules'));
+      console.log('Dependencies already installed');
+    } catch {
+      console.log('node_modules not found, installing dependencies...');
+      
+      // Detect package manager
+      let installer = 'npm';
+      try {
+        await fs.access(path.join(workspacePath, 'yarn.lock'));
+        installer = 'yarn';
+      } catch {
+        try {
+          await fs.access(path.join(workspacePath, 'pnpm-lock.yaml'));
+          installer = 'pnpm';
+        } catch {
+          // Default to npm
+        }
+      }
+      
+      console.log(`Installing dependencies with ${installer}...`);
+      
+      // Install dependencies
+      const installProcess = spawn(installer, ['install'], {
+        cwd: workspacePath,
+        shell: true
+      });
+      
+      await new Promise((resolve, reject) => {
+        installProcess.on('close', (code) => {
+          if (code === 0) {
+            console.log('Dependencies installed successfully');
+            resolve(true);
+          } else {
+            reject(new Error(`Dependency installation failed with code ${code}`));
+          }
+        });
+        
+        installProcess.on('error', reject);
+        
+        // Timeout after 2 minutes
+        setTimeout(() => {
+          installProcess.kill();
+          reject(new Error('Dependency installation timed out'));
+        }, 120000);
+      });
+    }
 
     // Don't specify port upfront - let the dev server choose
     // Most Next.js/React apps will auto-detect an available port

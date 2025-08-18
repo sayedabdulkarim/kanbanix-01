@@ -499,24 +499,32 @@ ${mainFiles[0].content}` : ''}
 Please analyze this existing project and generate the code needed to implement the requested feature.
 Determine what framework is being used and follow its patterns.
 
-Return your response as a JSON object with this structure:
+🎁 Output Format:
+Return a single valid JSON object with file paths as keys and code content as values.
+
+🚫 Important:
+- Do NOT include explanations or markdown - ONLY JSON
+- Do NOT wrap the JSON in backticks or code blocks
+- Return ONLY the JSON object, nothing else
+
+✅ Example Output (this is the EXACT format you must follow):
 {
-  "framework": "detected framework (nextjs, react, vue, angular, vanilla, etc.)",
+  "framework": "nextjs",
   "files": {
-    "/path/to/file.js": "file content here",
-    "/path/to/another.js": "more content"
+    "/src/components/Counter.js": "'use client';\n\nimport { useState } from 'react';\n\nexport default function Counter() {\n  const [count, setCount] = useState(0);\n  return (\n    <div>\n      <button onClick={() => setCount(count - 1)}>-</button>\n      <span>{count}</span>\n      <button onClick={() => setCount(count + 1)}>+</button>\n    </div>\n  );\n}",
+    "/src/app/counter/page.js": "'use client';\n\nimport Counter from '@/components/Counter';\n\nexport default function CounterPage() {\n  return <Counter />;\n}"
   },
-  "summary": "What was implemented",
-  "dependencies": ["any new npm packages needed"]
+  "summary": "Created counter component with increment/decrement",
+  "dependencies": []
 }
 
-Important:
+Requirements:
 - Use the existing project's patterns and structure
 - For Next.js App Router, put components in src/app or src/components
 - For Next.js Pages Router, put components in pages or components
-- For vanilla HTML/JS, modify the existing files
 - Include all necessary imports and exports
-- Make the code production-ready`
+- Make the code production-ready
+- Use 'use client' directive for interactive components in Next.js`
             }]
           });
           
@@ -526,31 +534,103 @@ Important:
           
           let generatedCode;
           try {
+            // Clean response by removing markdown formatting (like SynthAI does)
+            const cleanResponse = responseText.replace(/```(json)?/g, "").trim();
+            
             // Extract JSON from response
-            const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+            const jsonMatch = cleanResponse.match(/\{[\s\S]*\}/);
             if (!jsonMatch) {
               throw new Error('No JSON found in Claude response');
             }
-            generatedCode = JSON.parse(jsonMatch[0]);
+            
+            // Try to parse the JSON
+            try {
+              generatedCode = JSON.parse(jsonMatch[0]);
+            } catch (jsonError) {
+              // Try to sanitize the JSON if it has issues (from SynthAI approach)
+              console.log('Initial JSON parse failed, attempting to sanitize...');
+              const sanitizedJson = jsonMatch[0]
+                .replace(/\\'/g, "'") // Fix escaped single quotes
+                .replace(/\\"/g, '"') // Fix escaped double quotes
+                .replace(/\n/g, "\\n") // Properly escape newlines
+                .replace(/`([^`]*)`/g, '"$1"'); // Replace backticks with quotes
+              
+              try {
+                generatedCode = JSON.parse(sanitizedJson);
+              } catch (sanitizeError) {
+                // If sanitization still fails, try a more aggressive approach
+                console.log('Sanitization failed, attempting fallback extraction...');
+                
+                // Try to extract the structure manually
+                generatedCode = {
+                  framework: 'nextjs', // Default to nextjs for your case
+                  files: {},
+                  summary: 'Generated code for: ' + task_title,
+                  dependencies: []
+                };
+                
+                // Look for framework indication
+                const frameworkMatch = responseText.match(/"framework":\s*"([^"]+)"/);
+                if (frameworkMatch) {
+                  generatedCode.framework = frameworkMatch[1];
+                }
+                
+                // Look for summary
+                const summaryMatch = responseText.match(/"summary":\s*"([^"]+)"/);
+                if (summaryMatch) {
+                  generatedCode.summary = summaryMatch[1];
+                }
+                
+                // Try to extract file content patterns
+                // Look for patterns like "/path/to/file.js": "content" or "/path/to/file.js": `content`
+                const filePatterns = [
+                  /"(\/[^"]+\.[^"]+)":\s*"([^"]*)"/g,  // Double quoted content
+                  /"(\/[^"]+\.[^"]+)":\s*`([^`]*)`/g,  // Backtick content
+                ];
+                
+                for (const pattern of filePatterns) {
+                  let fileMatch;
+                  while ((fileMatch = pattern.exec(responseText)) !== null) {
+                    const filePath = fileMatch[1];
+                    const content = fileMatch[2]
+                      .replace(/\\n/g, '\n')  // Unescape newlines
+                      .replace(/\\t/g, '\t')  // Unescape tabs
+                      .replace(/\\"/g, '"')   // Unescape quotes
+                      .replace(/\\\\/g, '\\'); // Unescape backslashes
+                    generatedCode.files[filePath] = content;
+                  }
+                }
+                
+                // If still no files, try to extract code blocks as fallback
+                if (Object.keys(generatedCode.files).length === 0) {
+                  console.log('No files found in JSON, extracting code blocks...');
+                  const codeBlockRegex = /```(?:javascript|jsx|typescript|tsx|js|ts)?\n([\s\S]*?)```/g;
+                  let match;
+                  let fileIndex = 0;
+                  
+                  // For counter app, create specific files
+                  while ((match = codeBlockRegex.exec(responseText)) !== null) {
+                    let fileName;
+                    const code = match[1];
+                    
+                    // Try to determine file name from content
+                    if (code.includes('export default function Counter') || code.includes('function Counter')) {
+                      fileName = '/src/components/Counter.js';
+                    } else if (code.includes('useState') && fileIndex === 0) {
+                      fileName = '/src/app/counter/page.js';
+                    } else {
+                      fileName = `/src/components/generated_${fileIndex}.js`;
+                    }
+                    
+                    generatedCode.files[fileName] = code;
+                    fileIndex++;
+                  }
+                }
+              }
+            }
           } catch (parseError) {
             console.error('Failed to parse Claude response:', parseError);
-            // Fallback - try to extract code blocks
-            generatedCode = {
-              framework: 'unknown',
-              files: {},
-              summary: 'Generated code for: ' + task_title,
-              dependencies: []
-            };
-            
-            // Try to extract code blocks from the response
-            const codeBlockRegex = /```(?:javascript|jsx|typescript|tsx|js|ts)?\n([\s\S]*?)```/g;
-            let match;
-            let fileIndex = 0;
-            while ((match = codeBlockRegex.exec(responseText)) !== null) {
-              const fileName = `/generated_file_${fileIndex}.js`;
-              generatedCode.files[fileName] = match[1];
-              fileIndex++;
-            }
+            throw parseError;
           }
           
           // Write the generated files to disk
