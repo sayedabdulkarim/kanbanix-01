@@ -465,6 +465,24 @@ export const projectTools = [
             console.log('No package.json found');
           }
           
+          // Check if project uses Tailwind (has it in package.json)
+          const hasTailwindPackage = packageJson?.dependencies?.tailwindcss || packageJson?.devDependencies?.tailwindcss;
+          
+          // Only check for configs if project actually uses Tailwind
+          let hasTailwindConfig = false;
+          let hasPostCSSConfig = false;
+          
+          if (hasTailwindPackage) {
+            hasTailwindConfig = await fs.access(path.join(workspacePath, 'tailwind.config.js')).then(() => true).catch(() => false);
+            hasPostCSSConfig = await fs.access(path.join(workspacePath, 'postcss.config.js')).then(() => true).catch(() => false);
+            
+            if (!hasTailwindConfig || !hasPostCSSConfig) {
+              console.log('Project uses Tailwind but configuration files are missing, will add them...');
+            }
+          } else {
+            console.log('Project does not use Tailwind, will use existing CSS framework');
+          }
+          
           // Read some key files for context
           const filesToCheck = ['src/app/page.tsx', 'src/app/page.js', 'pages/index.js', 'pages/index.tsx', 'index.html', 'src/App.js', 'src/App.tsx'];
           for (const file of filesToCheck) {
@@ -491,6 +509,7 @@ Current project context:
 - Files in project: ${projectFiles.slice(0, 20).join(', ')}${projectFiles.length > 20 ? '...' : ''}
 - Package.json dependencies: ${packageJson ? Object.keys(packageJson.dependencies || {}).join(', ') : 'No package.json'}
 - Main files found: ${mainFiles.map(f => f.path).join(', ')}
+- CSS Framework: ${hasTailwindPackage ? 'Tailwind CSS' : packageJson?.dependencies?.bootstrap ? 'Bootstrap' : packageJson?.dependencies?.['@mui/material'] ? 'Material UI' : 'Default/Unknown'}
 
 ${mainFiles.length > 0 ? `Main file content preview:
 ${mainFiles[0].path}:
@@ -520,6 +539,8 @@ Return a single valid JSON object with file paths as keys and code content as va
 
 Requirements:
 - Use the existing project's patterns and structure
+- IMPORTANT: Use the CSS framework that's already in the project (Tailwind, Bootstrap, Material UI, etc.)
+- If project uses Tailwind, use Tailwind classes. If Bootstrap, use Bootstrap classes. Match the existing style approach.
 - For Next.js App Router, put components in src/app or src/components
 - For Next.js Pages Router, put components in pages or components
 - Include all necessary imports and exports
@@ -652,6 +673,70 @@ Requirements:
               diff: { added: content.split('\n').length, removed: 0, hunks: [] }
             });
           }
+          
+          // Only setup Tailwind configuration if project already uses Tailwind
+          if (hasTailwindPackage) {
+            // Project has Tailwind in package.json, ensure configs exist
+            if (!hasTailwindConfig) {
+              console.log('Creating tailwind.config.js...');
+              const tailwindConfig = `/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: [
+    './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
+    './src/components/**/*.{js,ts,jsx,tsx,mdx}',
+    './src/app/**/*.{js,ts,jsx,tsx,mdx}',
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}`;
+              await fs.writeFile(path.join(workspacePath, 'tailwind.config.js'), tailwindConfig, 'utf-8');
+              createdFiles.push({
+                path: '/tailwind.config.js',
+                type: 'created',
+                diff: { added: tailwindConfig.split('\n').length, removed: 0, hunks: [] }
+              });
+            }
+            
+            if (!hasPostCSSConfig) {
+              console.log('Creating postcss.config.js...');
+              const postcssConfig = `module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}`;
+              await fs.writeFile(path.join(workspacePath, 'postcss.config.js'), postcssConfig, 'utf-8');
+              createdFiles.push({
+                path: '/postcss.config.js',
+                type: 'created',
+                diff: { added: postcssConfig.split('\n').length, removed: 0, hunks: [] }
+              });
+            }
+            
+            // Check if globals.css has Tailwind directives
+            const globalsPath = path.join(workspacePath, 'src/app/globals.css');
+            try {
+              const globalsContent = await fs.readFile(globalsPath, 'utf-8');
+              if (!globalsContent.includes('@tailwind base')) {
+                console.log('Adding Tailwind directives to globals.css...');
+                const tailwindDirectives = `@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+`;
+                await fs.writeFile(globalsPath, tailwindDirectives + globalsContent, 'utf-8');
+                console.log('Added Tailwind directives to globals.css');
+              }
+            } catch (e) {
+              console.log('Could not update globals.css:', e.message);
+            }
+          }
+          
+          // No automatic Tailwind installation - respect project's CSS choice
+          // If they want Tailwind, they should have it in package.json already
+          // Or explicitly add it as a dependency in the task
           
           // Install dependencies if needed
           if (generatedCode.dependencies && generatedCode.dependencies.length > 0) {
