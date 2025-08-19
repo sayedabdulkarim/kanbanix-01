@@ -5,6 +5,8 @@ import { promisify } from 'util';
 import { getBoilerplateFiles, detectFramework } from '../templates/boilerplate-templates.js';
 import Anthropic from '@anthropic-ai/sdk';
 import dotenv from 'dotenv';
+import BuildValidator from '../utils/build-validator.js';
+import TailwindVersionDetector from '../utils/tailwind-version-detector.js';
 
 // Load environment variables
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
@@ -549,110 +551,162 @@ Requirements:
             }]
           });
           
-          // Parse Claude's response
+          // Parse Claude's response using SynthAI's robust approach
           const responseText = message.content[0].text;
           console.log('Claude response received, parsing...');
           
+          // Debug: Log raw response for troubleshooting
+          if (responseText.length < 1000) {
+            console.log('Raw response:', responseText);
+          } else {
+            console.log('Raw response length:', responseText.length);
+          }
+          
           let generatedCode;
           try {
-            // Clean response by removing markdown formatting (like SynthAI does)
-            const cleanResponse = responseText.replace(/```(json)?/g, "").trim();
+            // Try direct parsing first (from SynthAI's task-based-generator.js)
+            generatedCode = JSON.parse(responseText);
+            console.log('Direct JSON parse successful');
+          } catch (error) {
+            console.log('Direct parse failed, trying cleanup methods...');
             
-            // Extract JSON from response
-            const jsonMatch = cleanResponse.match(/\{[\s\S]*\}/);
+            // Try removing markdown formatting
+            const cleaned = responseText.replace(/```(json)?/g, "").trim();
+            
+            // Find JSON object in the content
+            const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
             if (!jsonMatch) {
-              throw new Error('No JSON found in Claude response');
+              throw new Error("No valid JSON found in response");
             }
             
-            // Try to parse the JSON
             try {
               generatedCode = JSON.parse(jsonMatch[0]);
-            } catch (jsonError) {
-              // Try to sanitize the JSON if it has issues (from SynthAI approach)
-              console.log('Initial JSON parse failed, attempting to sanitize...');
-              const sanitizedJson = jsonMatch[0]
-                .replace(/\\'/g, "'") // Fix escaped single quotes
-                .replace(/\\"/g, '"') // Fix escaped double quotes
-                .replace(/\n/g, "\\n") // Properly escape newlines
-                .replace(/`([^`]*)`/g, '"$1"'); // Replace backticks with quotes
+              console.log('Cleaned JSON parse successful');
+            } catch (parseError) {
+              console.log('Cleaned parse failed, attempting advanced sanitization...');
               
+              // Advanced sanitization from SynthAI
               try {
-                generatedCode = JSON.parse(sanitizedJson);
-              } catch (sanitizeError) {
-                // If sanitization still fails, try a more aggressive approach
-                console.log('Sanitization failed, attempting fallback extraction...');
+                // First attempt: Fix common JSON issues
+                let sanitized = jsonMatch[0]
+                  .replace(/\\\\/g, "\\\\\\\\")  // Fix backslashes
+                  .replace(/\\n/g, "\\\\n")      // Fix newlines
+                  .replace(/\\r/g, "\\\\r")      // Fix carriage returns
+                  .replace(/\\t/g, "\\\\t");     // Fix tabs
                 
-                // Try to extract the structure manually
+                generatedCode = JSON.parse(sanitized);
+                console.log('Advanced sanitization successful');
+              } catch (sanitizeError) {
+                console.log('Advanced sanitization failed, using manual extraction...');
+                
+                // Manual extraction as last resort
                 generatedCode = {
-                  framework: 'nextjs', // Default to nextjs for your case
+                  framework: 'nextjs',
                   files: {},
                   summary: 'Generated code for: ' + task_title,
                   dependencies: []
                 };
                 
-                // Look for framework indication
+                // Extract framework
                 const frameworkMatch = responseText.match(/"framework":\s*"([^"]+)"/);
                 if (frameworkMatch) {
                   generatedCode.framework = frameworkMatch[1];
                 }
                 
-                // Look for summary
+                // Extract summary
                 const summaryMatch = responseText.match(/"summary":\s*"([^"]+)"/);
                 if (summaryMatch) {
                   generatedCode.summary = summaryMatch[1];
                 }
                 
-                // Try to extract file content patterns
-                // Look for patterns like "/path/to/file.js": "content" or "/path/to/file.js": `content`
-                const filePatterns = [
-                  /"(\/[^"]+\.[^"]+)":\s*"([^"]*)"/g,  // Double quoted content
-                  /"(\/[^"]+\.[^"]+)":\s*`([^`]*)`/g,  // Backtick content
-                ];
+                // Try to extract files with better patterns
+                // Pattern 1: Standard JSON format with proper escaping
+                const fileRegex = /"(\/[^"]+\.[^"]+)":\s*"((?:[^"\\]|\\.)*)"/g;
+                let fileMatch;
                 
-                for (const pattern of filePatterns) {
-                  let fileMatch;
-                  while ((fileMatch = pattern.exec(responseText)) !== null) {
-                    const filePath = fileMatch[1];
-                    const content = fileMatch[2]
-                      .replace(/\\n/g, '\n')  // Unescape newlines
-                      .replace(/\\t/g, '\t')  // Unescape tabs
-                      .replace(/\\"/g, '"')   // Unescape quotes
-                      .replace(/\\\\/g, '\\'); // Unescape backslashes
-                    generatedCode.files[filePath] = content;
-                  }
+                while ((fileMatch = fileRegex.exec(responseText)) !== null) {
+                  const filePath = fileMatch[1];
+                  let content = fileMatch[2];
+                  
+                  // Properly unescape the content
+                  content = content
+                    .replace(/\\n/g, '\n')
+                    .replace(/\\t/g, '\t')
+                    .replace(/\\r/g, '\r')
+                    .replace(/\\"/g, '"')
+                    .replace(/\\'/g, "'")
+                    .replace(/\\\\/g, '\\');
+                  
+                  generatedCode.files[filePath] = content;
+                  console.log(`Extracted file: ${filePath}`);
                 }
                 
-                // If still no files, try to extract code blocks as fallback
+                // If no files found, try code block extraction
                 if (Object.keys(generatedCode.files).length === 0) {
-                  console.log('No files found in JSON, extracting code blocks...');
-                  const codeBlockRegex = /```(?:javascript|jsx|typescript|tsx|js|ts)?\n([\s\S]*?)```/g;
-                  let match;
-                  let fileIndex = 0;
+                  console.log('No files in JSON, trying code block extraction...');
                   
-                  // For counter app, create specific files
-                  while ((match = codeBlockRegex.exec(responseText)) !== null) {
+                  // Look for code blocks in the response
+                  const codeBlockRegex = /```(?:typescript|tsx|javascript|jsx|js|ts)\n([\s\S]*?)```/g;
+                  let blockMatch;
+                  let blockIndex = 0;
+                  
+                  while ((blockMatch = codeBlockRegex.exec(responseText)) !== null) {
+                    const code = blockMatch[1];
                     let fileName;
-                    const code = match[1];
                     
-                    // Try to determine file name from content
-                    if (code.includes('export default function Counter') || code.includes('function Counter')) {
-                      fileName = '/src/components/Counter.js';
-                    } else if (code.includes('useState') && fileIndex === 0) {
+                    // Determine file name based on content
+                    if (code.includes('export default function Counter') || 
+                        code.includes('function Counter') || 
+                        code.includes('const Counter')) {
+                      // Check if it's TypeScript or JavaScript
+                      const isTypeScript = code.includes(': React.FC') || 
+                                         code.includes('interface') || 
+                                         code.includes(': number') ||
+                                         code.includes(': string');
+                      fileName = isTypeScript ? '/src/components/Counter.tsx' : '/src/components/Counter.js';
+                    } else if (code.includes('Counter') && code.includes('page')) {
                       fileName = '/src/app/counter/page.js';
                     } else {
-                      fileName = `/src/components/generated_${fileIndex}.js`;
+                      fileName = `/src/components/Component${blockIndex}.js`;
                     }
                     
                     generatedCode.files[fileName] = code;
-                    fileIndex++;
+                    console.log(`Extracted code block as: ${fileName}`);
+                    blockIndex++;
                   }
                 }
               }
             }
-          } catch (parseError) {
-            console.error('Failed to parse Claude response:', parseError);
-            throw parseError;
           }
+          
+          // Validate and fix the generated code structure (from SynthAI)
+          if (generatedCode.files && typeof generatedCode.files === 'object') {
+            // Ensure all file contents are strings
+            for (const [path, content] of Object.entries(generatedCode.files)) {
+              if (typeof content !== 'string') {
+                console.warn(`Converting non-string content for ${path}`);
+                generatedCode.files[path] = JSON.stringify(content, null, 2);
+              }
+              
+              // Validate content is not truncated
+              if (content && content.endsWith('\\')) {
+                console.error(`WARNING: File ${path} appears truncated!`);
+                // Try to fix common truncation issues
+                if (content.includes('className=\\')) {
+                  console.log('Attempting to fix truncated className...');
+                  // This is a critical error - the content is incomplete
+                  throw new Error(`File content truncated at className. Response may be too long.`);
+                }
+              }
+            }
+          } else {
+            console.log('No files object found, creating from extracted data...');
+            if (!generatedCode.files) {
+              generatedCode.files = {};
+            }
+          }
+          
+          console.log(`Parsed ${Object.keys(generatedCode.files || {}).length} files from Claude response`);
           
           // Write the generated files to disk
           const createdFiles = [];
@@ -676,22 +730,32 @@ Requirements:
           
           // Only setup Tailwind configuration if project already uses Tailwind
           if (hasTailwindPackage) {
-            // Check for required peer dependencies
-            const hasPostCSS = packageJson?.dependencies?.postcss || packageJson?.devDependencies?.postcss;
-            const hasAutoprefixer = packageJson?.dependencies?.autoprefixer || packageJson?.devDependencies?.autoprefixer;
+            // Use TailwindVersionDetector to handle v3 vs v4 differences
+            const tailwindDetector = new TailwindVersionDetector();
             
-            // Track if we need to install peer dependencies
+            // Detect version and create appropriate PostCSS config
+            const tailwindInfo = await tailwindDetector.detectAndConfigurePostCSS(workspacePath);
+            console.log(`Detected Tailwind v${tailwindInfo.version}`);
+            
+            if (tailwindInfo.configCreated) {
+              createdFiles.push({
+                path: '/postcss.config.js',
+                type: 'created',
+                diff: { added: 6, removed: 0, hunks: [] }
+              });
+            }
+            
+            // Install required packages based on Tailwind version
             const missingDeps = [];
-            if (!hasPostCSS) {
-              missingDeps.push('postcss');
-              console.log('PostCSS package missing, will install...');
-            }
-            if (!hasAutoprefixer) {
-              missingDeps.push('autoprefixer');
-              console.log('Autoprefixer package missing, will install...');
+            for (const pkg of tailwindInfo.requiredPackages) {
+              const hasPkg = packageJson?.dependencies?.[pkg] || packageJson?.devDependencies?.[pkg];
+              if (!hasPkg) {
+                missingDeps.push(pkg);
+                console.log(`${pkg} package missing, will install...`);
+              }
             }
             
-            // Install missing peer dependencies first if needed
+            // Install missing dependencies if needed
             if (missingDeps.length > 0) {
               console.log(`Installing missing Tailwind peer dependencies: ${missingDeps.join(', ')}`);
               const installer = packageJson?.packageManager?.includes('yarn') ? 'yarn' : 'npm';
@@ -708,42 +772,15 @@ Requirements:
               }
             }
             
-            // Project has Tailwind in package.json, ensure configs exist
+            // Create tailwind.config.js if missing
             if (!hasTailwindConfig) {
               console.log('Creating tailwind.config.js...');
-              const tailwindConfig = `/** @type {import('tailwindcss').Config} */
-module.exports = {
-  content: [
-    './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
-    './src/components/**/*.{js,ts,jsx,tsx,mdx}',
-    './src/app/**/*.{js,ts,jsx,tsx,mdx}',
-  ],
-  theme: {
-    extend: {},
-  },
-  plugins: [],
-}`;
+              const tailwindConfig = tailwindDetector.getTailwindConfig(tailwindInfo.version);
               await fs.writeFile(path.join(workspacePath, 'tailwind.config.js'), tailwindConfig, 'utf-8');
               createdFiles.push({
                 path: '/tailwind.config.js',
                 type: 'created',
                 diff: { added: tailwindConfig.split('\n').length, removed: 0, hunks: [] }
-              });
-            }
-            
-            if (!hasPostCSSConfig) {
-              console.log('Creating postcss.config.js...');
-              const postcssConfig = `module.exports = {
-  plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
-  },
-}`;
-              await fs.writeFile(path.join(workspacePath, 'postcss.config.js'), postcssConfig, 'utf-8');
-              createdFiles.push({
-                path: '/postcss.config.js',
-                type: 'created',
-                diff: { added: postcssConfig.split('\n').length, removed: 0, hunks: [] }
               });
             }
             
@@ -786,6 +823,128 @@ module.exports = {
             }
           }
           
+          // Smart build validation decision (from SynthAI's update-project-v2.js)
+          const analyzeIfBuildNeeded = () => {
+            // Analyze the generated files to determine if build validation is needed
+            const analysis = {
+              filesCount: 0,
+              totalLinesChanged: 0,
+              hasEventHandlers: false,
+              hasStateManagement: false,
+              hasStructuralChanges: false,
+              isSimpleChange: true
+            };
+            
+            // Count files and analyze content
+            for (const [filePath, content] of Object.entries(generatedCode.files || {})) {
+              analysis.filesCount++;
+              analysis.totalLinesChanged += (content.split('\n').length || 0);
+              
+              // Check for complexity indicators
+              // Event handlers
+              if (/on(Click|Change|Submit|KeyDown|KeyUp|MouseOver|Focus|Blur)\s*[=:]/i.test(content)) {
+                analysis.hasEventHandlers = true;
+                analysis.isSimpleChange = false;
+              }
+              
+              // State management
+              if (/use(State|Reducer|Effect|Callback|Memo|Context)\s*\(/i.test(content)) {
+                analysis.hasStateManagement = true;
+                analysis.isSimpleChange = false;
+              }
+              
+              // Structural changes (new components)
+              if (/function\s+[A-Z]\w+\s*\(/.test(content) || /const\s+[A-Z]\w+\s*=\s*[\(\{]/.test(content)) {
+                analysis.hasStructuralChanges = true;
+                analysis.isSimpleChange = false;
+              }
+              
+              // New imports/exports
+              if (/^export\s+(default\s+)?/m.test(content) || /^import\s+/m.test(content)) {
+                analysis.isSimpleChange = false;
+              }
+            }
+            
+            // Check task title for simple changes
+            const taskLower = task_title.toLowerCase();
+            if (taskLower.includes('style') || taskLower.includes('color') || 
+                taskLower.includes('text') || taskLower.includes('content') ||
+                taskLower.includes('typo') || taskLower.includes('spacing')) {
+              analysis.isSimpleChange = true;
+            }
+            
+            // Determine if build is needed
+            const needsBuild = 
+              analysis.hasStructuralChanges ||
+              analysis.hasEventHandlers ||
+              analysis.hasStateManagement ||
+              analysis.filesCount > 2 ||
+              analysis.totalLinesChanged > 100;
+            
+            // Calculate confidence
+            let confidence = 0.9;
+            if (analysis.isSimpleChange) {
+              confidence = 0.95;
+            } else if (analysis.filesCount === 1 && analysis.totalLinesChanged < 20) {
+              confidence = 0.95;
+            } else if (analysis.filesCount > 3 || analysis.totalLinesChanged > 200) {
+              confidence = 0.95;
+            } else {
+              confidence = 0.7;
+            }
+            
+            console.log('Build decision analysis:', {
+              filesCount: analysis.filesCount,
+              linesChanged: analysis.totalLinesChanged,
+              hasComplexity: analysis.hasEventHandlers || analysis.hasStateManagement || analysis.hasStructuralChanges,
+              needsBuild,
+              confidence,
+              decision: !needsBuild && confidence >= 0.7 ? 'SKIP_BUILD' : 'RUN_BUILD'
+            });
+            
+            return { needsBuild, confidence, analysis };
+          };
+          
+          // Run build validation and auto-fix if needed (smart decision from SynthAI)
+          const enableBuildValidation = process.env.ENABLE_BUILD_VALIDATION === 'true';
+          let buildValidationResult = null;
+          
+          if (enableBuildValidation && process.env.ANTHROPIC_API_KEY) {
+            const buildDecision = analyzeIfBuildNeeded();
+            
+            // Skip build for simple changes with high confidence
+            if (!buildDecision.needsBuild && buildDecision.confidence >= 0.7) {
+              console.log('Build validation skipped - detected simple change with high confidence');
+              buildValidationResult = {
+                success: true,
+                skipped: true,
+                reason: 'Simple change detected',
+                confidence: buildDecision.confidence
+              };
+            } else {
+              console.log('Running build validation and auto-fix...');
+              const buildValidator = new BuildValidator();
+              
+              try {
+                buildValidationResult = await buildValidator.validateAndFix(
+                  workspacePath,
+                  task_title + (task_description ? ': ' + task_description : ''),
+                  process.env.ANTHROPIC_API_KEY
+                );
+                
+                if (buildValidationResult.success) {
+                  console.log('Build validation passed!');
+                } else {
+                  console.warn('Build validation failed after', buildValidationResult.attempts, 'attempts');
+                }
+              } catch (validationError) {
+                console.error('Build validation error:', validationError.message);
+              }
+            }
+          } else {
+            console.log('Build validation disabled or no API key');
+          }
+          
           return JSON.stringify({
             success: true,
             summary: generatedCode.summary || `Added ${task_title} to existing ${generatedCode.framework} project`,
@@ -793,7 +952,8 @@ module.exports = {
             message: `Successfully added feature to existing project`,
             framework: generatedCode.framework,
             filesCreated: Object.keys(generatedCode.files).length,
-            dependencies: generatedCode.dependencies || []
+            dependencies: generatedCode.dependencies || [],
+            buildValidation: buildValidationResult
           }, null, 2);
         }
         
