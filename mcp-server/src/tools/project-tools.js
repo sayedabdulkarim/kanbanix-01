@@ -676,6 +676,38 @@ Requirements:
           
           // Only setup Tailwind configuration if project already uses Tailwind
           if (hasTailwindPackage) {
+            // Check for required peer dependencies
+            const hasPostCSS = packageJson?.dependencies?.postcss || packageJson?.devDependencies?.postcss;
+            const hasAutoprefixer = packageJson?.dependencies?.autoprefixer || packageJson?.devDependencies?.autoprefixer;
+            
+            // Track if we need to install peer dependencies
+            const missingDeps = [];
+            if (!hasPostCSS) {
+              missingDeps.push('postcss');
+              console.log('PostCSS package missing, will install...');
+            }
+            if (!hasAutoprefixer) {
+              missingDeps.push('autoprefixer');
+              console.log('Autoprefixer package missing, will install...');
+            }
+            
+            // Install missing peer dependencies first if needed
+            if (missingDeps.length > 0) {
+              console.log(`Installing missing Tailwind peer dependencies: ${missingDeps.join(', ')}`);
+              const installer = packageJson?.packageManager?.includes('yarn') ? 'yarn' : 'npm';
+              const installCmd = installer === 'yarn' ? 'add --dev' : 'install --save-dev';
+              
+              try {
+                await exec(`${installer} ${installCmd} ${missingDeps.join(' ')}`, {
+                  cwd: workspacePath
+                });
+                console.log('Tailwind peer dependencies installed successfully');
+              } catch (installError) {
+                console.warn('Failed to install Tailwind peer dependencies:', installError.message);
+                console.warn('You may need to manually install:', missingDeps.join(', '));
+              }
+            }
+            
             // Project has Tailwind in package.json, ensure configs exist
             if (!hasTailwindConfig) {
               console.log('Creating tailwind.config.js...');
