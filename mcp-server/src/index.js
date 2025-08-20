@@ -18,6 +18,7 @@ import { projectTools } from './tools/project-tools.js';
 import { apiTools } from './tools/api-tools.js';
 import { githubAwareTools } from './tools/github-aware-tools.js';
 import { testTools } from './tools/test-tools.js';
+import { smartFileDetectorTools } from './tools/smart-file-detector.js';
 
 // Combine all tools
 const allTools = [
@@ -28,6 +29,7 @@ const allTools = [
   ...apiTools,
   ...githubAwareTools,
   ...testTools,
+  ...smartFileDetectorTools,
 ];
 
 // Create server instance

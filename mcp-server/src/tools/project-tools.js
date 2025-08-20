@@ -485,18 +485,51 @@ export const projectTools = [
             console.log('Project does not use Tailwind, will use existing CSS framework');
           }
           
-          // Read some key files for context
-          const filesToCheck = ['src/app/page.tsx', 'src/app/page.js', 'pages/index.js', 'pages/index.tsx', 'index.html', 'src/App.js', 'src/App.tsx'];
-          for (const file of filesToCheck) {
+          // SMART FILE DETECTION: Use MCP tools to find affected files
+          console.log('Using smart file detection to find affected files...');
+          
+          // Import the smart detector tools
+          const { smartFileDetectorTools } = await import('./smart-file-detector.js');
+          const detectTool = smartFileDetectorTools.find(t => t.name === 'detect_affected_files');
+          const readTool = smartFileDetectorTools.find(t => t.name === 'read_files_for_modification');
+          
+          // Detect which files might be affected by this task
+          const detectionResult = await detectTool.handler({
+            task_title,
+            workspace_path: workspacePath
+          });
+          
+          console.log(`Smart detection found ${detectionResult.files?.length || 0} potentially affected files`);
+          
+          // Read the content of affected files
+          let affectedFilesContent = {};
+          if (detectionResult.success && detectionResult.files.length > 0) {
+            const readResult = await readTool.handler({
+              files: detectionResult.files,
+              workspace_path: workspacePath
+            });
+            
+            if (readResult.success) {
+              affectedFilesContent = readResult.fileContents;
+              console.log(`Read ${readResult.existingFiles} existing files for modification context`);
+            }
+          }
+          
+          // Also read main files for general context (but just preview)
+          const mainFilesToCheck = ['src/app/page.tsx', 'src/app/page.js', 'pages/index.js', 'pages/index.tsx'];
+          for (const file of mainFilesToCheck) {
+            // Skip if already in affected files
+            if (affectedFilesContent[file]) continue;
+            
             try {
               const content = await fs.readFile(path.join(workspacePath, file), 'utf-8');
-              mainFiles.push({ path: file, content: content.substring(0, 500) }); // First 500 chars
+              mainFiles.push({ path: file, content: content.substring(0, 300) }); // Just 300 chars for context
             } catch (e) {
               // File doesn't exist
             }
           }
           
-          // Ask Claude to generate code for the existing project
+          // Ask Claude to generate/modify code for the existing project
           console.log('Calling Claude API to generate feature code...');
           const message = await anthropic.messages.create({
             model: 'claude-3-5-sonnet-20241022', // Using the model from SynthAI
@@ -510,14 +543,34 @@ Description: ${task_description || 'No additional description'}
 Current project context:
 - Files in project: ${projectFiles.slice(0, 20).join(', ')}${projectFiles.length > 20 ? '...' : ''}
 - Package.json dependencies: ${packageJson ? Object.keys(packageJson.dependencies || {}).join(', ') : 'No package.json'}
-- Main files found: ${mainFiles.map(f => f.path).join(', ')}
 - CSS Framework: ${hasTailwindPackage ? 'Tailwind CSS' : packageJson?.dependencies?.bootstrap ? 'Bootstrap' : packageJson?.dependencies?.['@mui/material'] ? 'Material UI' : 'Default/Unknown'}
 
-${mainFiles.length > 0 ? `Main file content preview:
-${mainFiles[0].path}:
-${mainFiles[0].content}` : ''}
+${Object.keys(affectedFilesContent).length > 0 ? `
+🔴 IMPORTANT: The following files already exist and MUST be MODIFIED, not replaced:
+${Object.entries(affectedFilesContent).map(([filePath, fileData]) => {
+  if (fileData.exists && fileData.content) {
+    return `
+=====================================
+File: ${filePath} (${fileData.lines} lines)
+Current Content:
+${fileData.content}
+=====================================`;
+  }
+  return '';
+}).join('\n')}
 
-Please analyze this existing project and generate the code needed to implement the requested feature.
+CRITICAL INSTRUCTIONS:
+- For files listed above, you MUST MODIFY the existing code, not create new files
+- Add the requested feature to the existing implementation
+- Preserve ALL existing functionality
+- Return the COMPLETE modified file content, not just the changes
+- Do NOT create a new file if one already exists - modify the existing one
+` : ''}
+
+${mainFiles.length > 0 ? `Additional context from main files:
+${mainFiles.map(f => `${f.path}: ${f.content}`).join('\n\n')}` : ''}
+
+Please ${Object.keys(affectedFilesContent).length > 0 ? 'MODIFY the existing files to add' : 'generate the code for'} the requested feature.
 Determine what framework is being used and follow its patterns.
 
 🎁 Output Format:
@@ -713,19 +766,43 @@ Requirements:
           for (const [filePath, content] of Object.entries(generatedCode.files)) {
             const fullPath = path.join(workspacePath, filePath.startsWith('/') ? filePath.slice(1) : filePath);
             
+            // Check if file already exists (to track if we're updating or creating)
+            let fileExists = false;
+            let oldLineCount = 0;
+            try {
+              const existingContent = await fs.readFile(fullPath, 'utf-8');
+              fileExists = true;
+              oldLineCount = existingContent.split('\n').length;
+              
+              // Check if the file was in our affected files list
+              const normalizedPath = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+              if (affectedFilesContent[normalizedPath]?.exists) {
+                console.log(`Updating existing file: ${filePath} (was ${oldLineCount} lines)`);
+              }
+            } catch (e) {
+              // File doesn't exist, we'll create it
+              console.log(`Creating new file: ${filePath}`);
+            }
+            
             // Create directory if needed
             const dir = path.dirname(fullPath);
             await fs.mkdir(dir, { recursive: true });
             
             // Write file
             await fs.writeFile(fullPath, content, 'utf-8');
-            console.log(`Created/Updated: ${filePath}`);
             
+            const newLineCount = content.split('\n').length;
             createdFiles.push({
               path: filePath,
-              type: 'created',
-              diff: { added: content.split('\n').length, removed: 0, hunks: [] }
+              type: fileExists ? 'updated' : 'created',
+              diff: { 
+                added: fileExists ? Math.max(0, newLineCount - oldLineCount) : newLineCount, 
+                removed: fileExists ? Math.max(0, oldLineCount - newLineCount) : 0, 
+                hunks: [] 
+              }
             });
+            
+            console.log(`${fileExists ? 'Updated' : 'Created'}: ${filePath} (${newLineCount} lines)`);
           }
           
           // Only setup Tailwind configuration if project already uses Tailwind
