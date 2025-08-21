@@ -485,33 +485,124 @@ export const projectTools = [
             console.log('Project does not use Tailwind, will use existing CSS framework');
           }
           
-          // SMART FILE DETECTION: Use MCP tools to find affected files
-          console.log('Using smart file detection to find affected files...');
+          // Use MCP tools to understand project structure and find relevant files
+          console.log('Using MCP tools to analyze project and find relevant files...');
           
-          // Import the smart detector tools
-          const { smartFileDetectorTools } = await import('./smart-file-detector.js');
-          const detectTool = smartFileDetectorTools.find(t => t.name === 'detect_affected_files');
-          const readTool = smartFileDetectorTools.find(t => t.name === 'read_files_for_modification');
+          // Import the MCP tools
+          const { fileTools } = await import('./file-tools.js');
+          const { codeTools } = await import('./code-tools.js');
           
-          // Detect which files might be affected by this task
-          const detectionResult = await detectTool.handler({
-            task_title,
-            workspace_path: workspacePath
-          });
+          const listTool = fileTools.find(t => t.name === 'list_files');
+          const readTool = fileTools.find(t => t.name === 'read_file');
+          const searchTool = fileTools.find(t => t.name === 'search_files');
+          const analyzeStructureTool = codeTools.find(t => t.name === 'analyze_code_structure');
           
-          console.log(`Smart detection found ${detectionResult.files?.length || 0} potentially affected files`);
+          // First, check project structure to understand what we're working with
+          let projectStructure = {};
+          try {
+            projectStructure = await analyzeStructureTool.handler({ path: workspacePath });
+            console.log('Project structure:', projectStructure);
+          } catch (e) {
+            console.log('Could not determine project structure');
+          }
           
-          // Read the content of affected files
-          let affectedFilesContent = {};
-          if (detectionResult.success && detectionResult.files.length > 0) {
-            const readResult = await readTool.handler({
-              files: detectionResult.files,
-              workspace_path: workspacePath
+          // List all project files to understand what exists
+          let allFiles = [];
+          try {
+            const listResult = await listTool.handler({ path: workspacePath });
+            allFiles = listResult.files || [];
+            console.log(`Found ${allFiles.length} files in project`);
+          } catch (e) {
+            console.log('Could not list project files');
+          }
+          
+          // Use search_files to find files related to the task
+          let relevantFiles = [];
+          try {
+            // Search for the task title directly in the code
+            const searchResult = await searchTool.handler({
+              query: task_title,
+              path: workspacePath,
+              extension: '.js'
             });
             
-            if (readResult.success) {
-              affectedFilesContent = readResult.fileContents;
-              console.log(`Read ${readResult.existingFiles} existing files for modification context`);
+            // Also search for .jsx, .ts, .tsx files
+            for (const ext of ['.jsx', '.ts', '.tsx']) {
+              try {
+                const moreResults = await searchTool.handler({
+                  query: task_title,
+                  path: workspacePath,
+                  extension: ext
+                });
+                if (moreResults && typeof moreResults === 'string' && moreResults.includes(':')) {
+                  // Parse the file paths from the results
+                  const lines = moreResults.split('\n');
+                  for (const line of lines) {
+                    if (line.includes(':') && !line.startsWith('  Line')) {
+                      const filePath = line.split(':')[0];
+                      if (!relevantFiles.includes(filePath)) {
+                        relevantFiles.push(filePath);
+                      }
+                    }
+                  }
+                }
+              } catch (e) {
+                // Continue with other extensions
+              }
+            }
+            
+            console.log(`Found ${relevantFiles.length} files related to task`);
+          } catch (e) {
+            console.log('Initial search found no direct matches');
+          }
+          
+          // If no files found, try a broader search based on existing components
+          if (relevantFiles.length === 0) {
+            // Look for component files that might need modification
+            const componentFiles = allFiles.filter(f => 
+              (f.includes('/components/') || f.includes('/app/')) && 
+              (f.endsWith('.js') || f.endsWith('.jsx') || f.endsWith('.ts') || f.endsWith('.tsx'))
+            );
+            
+            // Read and check each component file to see if it's relevant
+            for (const file of componentFiles.slice(0, 10)) { // Check up to 10 component files
+              try {
+                const fullPath = path.join(workspacePath, file);
+                const content = await readTool.handler({
+                  path: fullPath
+                });
+                
+                // Let Claude decide if this file is relevant by including it
+                if (content && typeof content === 'string') {
+                  relevantFiles.push(file);
+                }
+              } catch (e) {
+                // Skip files that can't be read
+              }
+            }
+          }
+          
+          console.log(`Total files to provide as context: ${relevantFiles.length}`);
+          
+          // Read the content of relevant files
+          let affectedFilesContent = {};
+          for (const filePath of relevantFiles) {
+            try {
+              const fullPath = filePath.startsWith('/') ? filePath : path.join(workspacePath, filePath);
+              const readResult = await readTool.handler({
+                path: fullPath
+              });
+              
+              if (readResult && typeof readResult === 'string') {
+                affectedFilesContent[filePath] = {
+                  content: readResult,
+                  exists: true,
+                  lines: readResult.split('\n').length
+                };
+                console.log(`Read file: ${filePath} (${affectedFilesContent[filePath].lines} lines)`);
+              }
+            } catch (e) {
+              console.log(`Failed to read ${filePath}:`, e.message);
             }
           }
           
