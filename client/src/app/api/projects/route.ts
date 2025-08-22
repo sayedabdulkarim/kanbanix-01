@@ -138,11 +138,11 @@ export async function POST(request: NextRequest) {
         userId: session.user.id,
         columns: {
           create: [
-            { name: 'Backlog', order: 0, color: '#6B7280' },
-            { name: 'To Do', order: 1, color: '#3B82F6' },
-            { name: 'In Progress', order: 2, color: '#F59E0B' },
-            { name: 'In Review', order: 3, color: '#8B5CF6' },
-            { name: 'Done', order: 4, color: '#10B981' },
+            { name: 'Backlog', order: 0, color: '#6B7280', status: 'todo' },
+            { name: 'To Do', order: 1, color: '#3B82F6', status: 'todo' },
+            { name: 'In Progress', order: 2, color: '#F59E0B', status: 'inProgress' },
+            { name: 'In Review', order: 3, color: '#8B5CF6', status: 'inReview' },
+            { name: 'Done', order: 4, color: '#10B981', status: 'done' },
           ],
         },
       },

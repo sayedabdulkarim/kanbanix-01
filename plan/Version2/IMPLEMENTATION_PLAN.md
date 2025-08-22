@@ -34,11 +34,18 @@ Example: [Task-cmel0wa0h] Create counter app with increment and decrement button
 4. Show tooltip on disabled buttons: "Please commit changes to raise PR"
 5. Remove individual task commit buttons
 
-**New Column Flow:**
-- **TODO**: Tasks waiting to be executed
+**Column Flow (Already Implemented):**
+- **BACKLOG**: Tasks waiting to be worked on
+- **TODO**: Tasks ready to be executed
 - **IN PROGRESS**: Tasks currently being executed by AI
-- **IN REVIEW**: Tasks completed by AI, awaiting commit/PR
+- **IN REVIEW**: Tasks completed by AI, awaiting commit/PR ✅ (Column exists)
 - **DONE**: Tasks merged to main branch
+
+**Implementation Notes:**
+- The "In Review" column already exists in the database and UI
+- Need to update AI completion logic to auto-move tasks to "In Review"
+- Board-level buttons should be placed in the project header
+- Remove commit buttons from AgentExecutionPanel and TaskExecutionPanel components
 
 ### Phase 3: Implement Commit/PR State Management (Day 2)
 1. Track if there are uncommitted changes in session

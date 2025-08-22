@@ -425,9 +425,10 @@ export default function TaskExecutionPanel({
     switch (status) {
       case 'done': return 'Done';
       case 'inProgress': 
-        // Show completion status if execution is done but task still in progress
+        // Phase 2: Task should be in review after AI completion
+        // This is a fallback display - the task should have moved to inReview status
         if (execution?.status === 'completed') {
-          return 'In Progress (Completed)';
+          return 'In Review';
         }
         if (execution?.status === 'running') {
           return 'In Progress (Running...)';
@@ -563,66 +564,12 @@ export default function TaskExecutionPanel({
             <span className="font-medium">Dev Server</span>
           </div>
           <div className="flex items-center gap-2">
-            {/* Show action buttons when execution is completed */}
-            {execution?.status === 'completed' && (
-              <>
-                {!prCreated ? (
-                  <div className="relative group">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleCreatePR();
-                      }}
-                      disabled={creatingPR || !branchInfo?.branch || branchInfo?.branch === 'main' || !isCommitted}
-                      className="px-3 py-1 text-sm flex items-center gap-2 border rounded hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {creatingPR ? (
-                        <>
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          Creating...
-                        </>
-                      ) : (
-                        <>
-                          <GitPullRequest className="h-3 w-3" />
-                          Create PR
-                        </>
-                      )}
-                    </button>
-                    {/* Tooltip for disabled state */}
-                    {(creatingPR || !branchInfo?.branch || branchInfo?.branch === 'main' || !isCommitted) && (
-                      <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 text-xs bg-gray-800/95 text-white rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap">
-                        <div className="text-center">
-                          {creatingPR ? (
-                            <div className="font-medium">Creating pull request...</div>
-                          ) : !isCommitted ? (
-                            <>
-                              <div className="font-medium mb-1">Commit changes first</div>
-                              <div className="text-gray-300">Go to Diffs tab → Click Commit button</div>
-                            </>
-                          ) : branchInfo?.branch === 'main' ? (
-                            <>
-                              <div className="font-medium mb-1">Cannot create PR from main branch</div>
-                              <div className="text-gray-300">Task needs its own feature branch</div>
-                            </>
-                          ) : !branchInfo?.branch ? (
-                            <div className="font-medium">No branch information available</div>
-                          ) : (
-                            <div className="font-medium">Cannot create pull request</div>
-                          )}
-                        </div>
-                        <div className="absolute top-full left-1/2 transform -translate-x-1/2 -mt-px">
-                          <div className="border-4 border-transparent border-t-gray-800/95"></div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 px-3 py-1 text-sm text-green-500">
-                    <GitPullRequest className="h-3 w-3" />
-                    PR Created
-                  </div>
-                )}
-              </>
+            {/* Phase 2: Removed Create PR button - now at board level */}
+            {execution?.status === 'completed' && prCreated && (
+              <div className="flex items-center gap-2 px-3 py-1 text-sm text-green-500">
+                <GitPullRequest className="h-3 w-3" />
+                PR Created
+              </div>
             )}
             {/* Show status when running */}
             {execution?.status === 'running' && (
@@ -631,10 +578,7 @@ export default function TaskExecutionPanel({
                 AI is generating code...
               </div>
             )}
-            {/* New Attempt button always visible */}
-            <button className="px-3 py-1 text-sm border rounded hover:bg-secondary">
-              + New Attempt
-            </button>
+            {/* Phase 2: Removed New Attempt button */}
           </div>
         </button>
         
@@ -793,18 +737,7 @@ export default function TaskExecutionPanel({
                 >
                   Collapse All
                 </button>
-                {execution?.status === 'completed' && !isCommitted && (
-                  <button
-                    onClick={() => {
-                      setCommitMessage('');
-                      setShowCommitDialog(true);
-                    }}
-                    className="px-3 py-1 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90"
-                  >
-                    <GitCommit className="h-3 w-3 inline mr-1" />
-                    Commit
-                  </button>
-                )}
+                {/* Phase 2: Removed Commit button - now at board level */}
                 {isCommitted && (
                   <span className="px-3 py-1 text-sm text-green-500">
                     ✓ Committed
@@ -866,39 +799,7 @@ export default function TaskExecutionPanel({
         </div>
       </div>
 
-      {/* Commit Dialog */}
-      {showCommitDialog && (
-        <div className="absolute inset-0 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-card rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold mb-4">Commit Changes</h3>
-            <div className="mb-2 text-sm text-muted-foreground">
-              <p>Base message: <span className="font-mono">feat: {task.title}</span></p>
-              <p className="mt-1">Add additional details below:</p>
-            </div>
-            <textarea
-              value={commitMessage}
-              onChange={(e) => setCommitMessage(e.target.value)}
-              className="w-full h-24 px-3 py-2 border rounded-md bg-background mb-4"
-              placeholder="Additional details about this change..."
-            />
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setShowCommitDialog(false)}
-                className="px-4 py-2 text-sm border rounded hover:bg-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCommit}
-                className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90"
-                disabled={committing}
-              >
-                {committing ? 'Committing...' : 'Commit'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Phase 2: Removed Commit Dialog - commit functionality now at board level */}
     </div>
   );
 }

@@ -107,6 +107,7 @@ model Column {
   name      String
   order     Int
   color     String?  // Optional column color
+  status    String?  // Column status mapping: todo, inProgress, inReview, done, cancelled
   
   // Relations
   projectId String

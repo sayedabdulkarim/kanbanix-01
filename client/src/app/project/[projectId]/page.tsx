@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState, useCallback } from 'react';
-import { ArrowLeft, Plus, Loader2, RefreshCw, GitBranch } from 'lucide-react';
+import { ArrowLeft, Plus, Loader2, RefreshCw, GitBranch, GitCommit, GitPullRequest } from 'lucide-react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import workspaceService from '@/lib/services/workspaceService';
@@ -58,6 +58,12 @@ export default function ProjectBoard() {
   const [selectedTaskForDetails, setSelectedTaskForDetails] = useState<Task | null>(null);
   const [executingTaskId, setExecutingTaskId] = useState<string | null>(null);
   const [taskExecutions, setTaskExecutions] = useState<Record<string, any>>({});
+  
+  // Phase 2: State for Commit/PR buttons
+  const [hasUncommittedChanges, setHasUncommittedChanges] = useState(false);
+  const [isCommitting, setIsCommitting] = useState(false);
+  const [isCreatingPR, setIsCreatingPR] = useState(false);
+  const [commitMessage, setCommitMessage] = useState('');
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -242,6 +248,12 @@ export default function ProjectBoard() {
         if (execution && execution.status === 'running') {
           setTimeout(() => pollExecutionStatus(taskId), 2000);
         } else if (execution && (execution.status === 'completed' || execution.status === 'failed')) {
+          // Phase 2: Refresh project data to get updated task status after AI completion
+          if (execution.status === 'completed') {
+            // Fetch updated project data to reflect task move to In Review
+            await fetchProject();
+          }
+          
           // Clear executing task when done
           if (executingTaskId === taskId) {
             setTimeout(() => setExecutingTaskId(null), 3000);
@@ -476,6 +488,94 @@ export default function ProjectBoard() {
     setSelectedTaskForDetails(task);
   };
 
+  // Phase 2: Handle Commit All functionality
+  const handleCommitAll = async () => {
+    if (!project) return;
+    
+    setIsCommitting(true);
+    try {
+      // Get all tasks in review
+      const tasksInReview = tasks.filter(t => t.status === 'inReview');
+      
+      if (tasksInReview.length === 0) {
+        alert('No tasks in review to commit');
+        return;
+      }
+      
+      // Create commit message with all task titles
+      const taskTitles = tasksInReview.map(t => `- ${t.title}`).join('\n');
+      const message = `feat: Complete multiple tasks\n\n${taskTitles}`;
+      
+      const response = await fetch('/api/workspace/commit-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: project.id,
+          message,
+          taskIds: tasksInReview.map(t => t.id)
+        })
+      });
+      
+      if (response.ok) {
+        setHasUncommittedChanges(false);
+        alert('All changes committed successfully!');
+      } else {
+        const error = await response.json();
+        alert(`Failed to commit: ${error.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Commit error:', error);
+      alert('Failed to commit changes');
+    } finally {
+      setIsCommitting(false);
+    }
+  };
+
+  // Phase 2: Handle Create PR functionality
+  const handleCreatePR = async () => {
+    if (!project) return;
+    
+    setIsCreatingPR(true);
+    try {
+      const response = await fetch('/api/workspace/pr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: project.id,
+          title: `Update: ${project.name}`,
+          description: 'Pull request created from Kanbanix board'
+        })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        alert(`Pull request created successfully! PR #${data.pullRequest?.number || ''}`);
+        
+        // Move all in-review tasks to done
+        const inReviewTasks = tasks.filter(t => t.status === 'inReview');
+        const doneColumn = project.columns.find(c => c.status === 'done' || c.name.toLowerCase() === 'done');
+        
+        if (doneColumn) {
+          setTasks(prevTasks => 
+            prevTasks.map(t => 
+              inReviewTasks.find(rt => rt.id === t.id) 
+                ? { ...t, status: 'done', columnId: doneColumn.id }
+                : t
+            )
+          );
+        }
+      } else {
+        const error = await response.json();
+        alert(`Failed to create PR: ${error.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('PR creation error:', error);
+      alert('Failed to create pull request');
+    } finally {
+      setIsCreatingPR(false);
+    }
+  };
+
   const handleUpdateTaskFromDetails = async (taskId: string, updates: Partial<Task>) => {
     try {
       const response = await apiFetch(API_ENDPOINTS.tasks.update(taskId), {
@@ -553,6 +653,33 @@ export default function ProjectBoard() {
               >
                 <RefreshCw className={cn("h-5 w-5", workspaceLoading && "animate-spin")} />
               </button>
+              
+              {/* Phase 2: Board-level Commit and PR buttons */}
+              <button
+                onClick={handleCommitAll}
+                disabled={isCommitting || tasks.filter(t => t.status === 'inReview').length === 0}
+                className="px-4 py-2 rounded-lg border border-border hover:bg-secondary transition-colors inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                title={tasks.filter(t => t.status === 'inReview').length === 0 
+                  ? "No tasks in review to commit" 
+                  : "Commit all reviewed tasks"}
+              >
+                <GitCommit className="h-4 w-4" />
+                {isCommitting ? 'Committing...' : 'Commit All'}
+              </button>
+              <button
+                onClick={handleCreatePR}
+                disabled={isCreatingPR || hasUncommittedChanges || tasks.filter(t => t.status === 'inReview').length > 0}
+                className="px-4 py-2 rounded-lg border border-border hover:bg-secondary transition-colors inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                title={hasUncommittedChanges 
+                  ? "Please commit changes first" 
+                  : tasks.filter(t => t.status === 'inReview').length > 0
+                  ? "Please commit all reviewed tasks first"
+                  : "Create pull request"}
+              >
+                <GitPullRequest className="h-4 w-4" />
+                {isCreatingPR ? 'Creating...' : 'Create PR'}
+              </button>
+              
               <button 
                 onClick={() => handleAddTask(selectedColumnId)}
                 className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors inline-flex items-center gap-2"

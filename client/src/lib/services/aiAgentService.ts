@@ -226,6 +226,47 @@ export class AIAgentService {
         })
       });
 
+      // Phase 2: Auto-move task to "In Review" column after successful AI completion
+      const execution = await this.prisma.agentExecution.findUnique({
+        where: { id: executionId },
+        include: { 
+          task: {
+            include: {
+              project: {
+                include: {
+                  columns: true
+                }
+              }
+            }
+          }
+        }
+      });
+
+      if (execution && execution.task) {
+        // Find the "In Review" column for this project by status
+        const inReviewColumn = execution.task.project.columns.find(
+          col => col.status === 'inReview' || col.name.toLowerCase().includes('review')
+        );
+        
+        if (inReviewColumn) {
+          // Update task to move to "In Review" column
+          await this.prisma.task.update({
+            where: { id: execution.task.id },
+            data: {
+              status: 'inReview',
+              columnId: inReviewColumn.id,
+              updatedAt: new Date()
+            }
+          });
+          
+          await this.addExecutionLog(
+            executionId, 
+            'info', 
+            'Task moved to In Review column for user review'
+          );
+        }
+      }
+
     } catch (error) {
       await this.updateExecutionStatus(executionId, AgentStatus.FAILED, {
         completedAt: new Date(),

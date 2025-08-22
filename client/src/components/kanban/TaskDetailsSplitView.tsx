@@ -68,26 +68,7 @@ export default function TaskDetailsSplitView({
     });
   };
 
-  const handleCreatePR = () => {
-    const prUrl = `https://github.com/project/pull/new/${task.metadata?.branch || 'main'}`;
-    onUpdateTask(task.id, {
-      metadata: {
-        ...task.metadata,
-        prUrl,
-        activities: [
-          ...(task.metadata?.activities || []),
-          {
-            id: `activity-${Date.now()}`,
-            type: 'updated',
-            description: 'Pull request created',
-            timestamp: new Date(),
-            user: 'Current User',
-            details: { prUrl },
-          },
-        ],
-      },
-    });
-  };
+  // Phase 2: Removed handleCreatePR - PR creation now handled at board level
 
   const getStatusColor = (status: string) => {
     const colors = {
@@ -220,13 +201,7 @@ export default function TaskDetailsSplitView({
             <Square className="h-3 w-3" />
             Stop Dev
           </button>
-          <button
-            onClick={handleCreatePR}
-            className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 text-sm inline-flex items-center gap-1"
-          >
-            <GitBranch className="h-3 w-3" />
-            Create PR
-          </button>
+          {/* Phase 2: Removed individual Create PR button - now at board level */}
           {task.metadata?.prUrl && (
             <a
               href={task.metadata.prUrl}

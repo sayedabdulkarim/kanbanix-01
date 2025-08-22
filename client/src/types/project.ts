@@ -17,6 +17,7 @@ export interface Column {
   name: string;
   order: number;
   color: string;
+  status?: string; // Column status mapping: todo, inProgress, inReview, done, cancelled
 }
 
 export interface ProjectSettings {
