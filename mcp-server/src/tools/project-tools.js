@@ -12,7 +12,7 @@ import TailwindVersionDetector from '../utils/tailwind-version-detector.js';
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 const exec = promisify(execCallback);
-const PROJECT_ROOT = path.resolve(process.cwd(), '..');
+const PROJECT_ROOT = process.env.WORKSPACE_PATH || path.resolve(process.cwd(), '..');
 
 // LLM-based intent analyzer - uses Claude Desktop in development mode
 // This replaces hardcoded keyword detection as per KANBANIX_AI_WORKFLOW_V2.md
@@ -516,71 +516,88 @@ export const projectTools = [
             console.log('Could not list project files');
           }
           
-          // Use search_files to find files related to the task
+          // Use Claude to intelligently find relevant files
           let relevantFiles = [];
+          
+          // First, ask Claude what files to look for based on the task
+          const findFilesPrompt = `Given this task: "${task_title}"
+          
+Based on the task, what search terms should I use to find relevant files in the codebase?
+Think about:
+- Component names that might be involved (e.g., Counter, Button, Form)
+- Feature keywords (e.g., increment, decrement, reset, toggle)
+- File patterns (e.g., components/, app/, pages/)
+
+Return a JSON object with search terms:
+{
+  "searchTerms": ["term1", "term2", ...],
+  "filePatterns": ["pattern1", "pattern2", ...]
+}`;
+
+          let searchTerms = [];
+          let filePatterns = [];
+          
           try {
-            // Search for the task title directly in the code
-            const searchResult = await searchTool.handler({
-              query: task_title,
-              path: workspacePath,
-              extension: '.js'
-            });
-            
-            // Also search for .jsx, .ts, .tsx files
-            for (const ext of ['.jsx', '.ts', '.tsx']) {
+            const claudeService = require('../claude-service');
+            const searchResponse = await claudeService.generateResponse(findFilesPrompt);
+            const searchData = JSON.parse(searchResponse);
+            searchTerms = searchData.searchTerms || [];
+            filePatterns = searchData.filePatterns || [];
+            console.log(`Claude suggested search terms: ${searchTerms.join(', ')}`);
+          } catch (e) {
+            console.log('Could not get search suggestions from Claude, using fallback');
+            // Fallback: extract basic keywords from task title
+            const words = task_title.toLowerCase().split(' ');
+            if (words.includes('counter')) searchTerms.push('Counter', 'count');
+            if (words.includes('button')) searchTerms.push('button', 'Button');
+            if (words.includes('reset')) searchTerms.push('reset', 'Reset');
+            if (words.includes('increment')) searchTerms.push('increment', '+');
+            if (words.includes('decrement')) searchTerms.push('decrement', '-');
+          }
+          
+          // Search for files using Claude's suggested terms
+          const foundFiles = new Set();
+          
+          for (const term of searchTerms) {
+            for (const ext of ['.js', '.jsx', '.ts', '.tsx']) {
               try {
-                const moreResults = await searchTool.handler({
-                  query: task_title,
+                const searchResult = await searchTool.handler({
+                  query: term,
                   path: workspacePath,
                   extension: ext
                 });
-                if (moreResults && typeof moreResults === 'string' && moreResults.includes(':')) {
-                  // Parse the file paths from the results
-                  const lines = moreResults.split('\n');
+                
+                if (searchResult && typeof searchResult === 'string' && searchResult.includes(':')) {
+                  const lines = searchResult.split('\n');
                   for (const line of lines) {
                     if (line.includes(':') && !line.startsWith('  Line')) {
                       const filePath = line.split(':')[0];
-                      if (!relevantFiles.includes(filePath)) {
-                        relevantFiles.push(filePath);
-                      }
+                      foundFiles.add(filePath);
                     }
                   }
                 }
               } catch (e) {
-                // Continue with other extensions
+                // Continue with next search
               }
             }
-            
-            console.log(`Found ${relevantFiles.length} files related to task`);
-          } catch (e) {
-            console.log('Initial search found no direct matches');
           }
           
-          // If no files found, try a broader search based on existing components
-          if (relevantFiles.length === 0) {
-            // Look for component files that might need modification
-            const componentFiles = allFiles.filter(f => 
-              (f.includes('/components/') || f.includes('/app/')) && 
-              (f.endsWith('.js') || f.endsWith('.jsx') || f.endsWith('.ts') || f.endsWith('.tsx'))
-            );
-            
-            // Read and check each component file to see if it's relevant
-            for (const file of componentFiles.slice(0, 10)) { // Check up to 10 component files
-              try {
-                const fullPath = path.join(workspacePath, file);
-                const content = await readTool.handler({
-                  path: fullPath
-                });
-                
-                // Let Claude decide if this file is relevant by including it
-                if (content && typeof content === 'string') {
-                  relevantFiles.push(file);
-                }
-              } catch (e) {
-                // Skip files that can't be read
-              }
-            }
+          // Also check common component locations
+          const componentFiles = allFiles.filter(f => {
+            const matchesPattern = filePatterns.length === 0 || 
+              filePatterns.some(pattern => f.includes(pattern));
+            const isComponentFile = (f.includes('/components/') || f.includes('/app/')) && 
+              (f.endsWith('.js') || f.endsWith('.jsx') || f.endsWith('.ts') || f.endsWith('.tsx'));
+            return matchesPattern && isComponentFile;
+          });
+          
+          // Add component files that might be relevant
+          for (const file of componentFiles) {
+            foundFiles.add(file);
           }
+          
+          relevantFiles = Array.from(foundFiles);
+          console.log(`Found ${relevantFiles.length} potentially relevant files`);
           
           console.log(`Total files to provide as context: ${relevantFiles.length}`);
           
@@ -588,18 +605,34 @@ export const projectTools = [
           let affectedFilesContent = {};
           for (const filePath of relevantFiles) {
             try {
-              const fullPath = filePath.startsWith('/') ? filePath : path.join(workspacePath, filePath);
+              let cleanFilePath = filePath;
+              
+              // Remove the project path prefix if it's already included
+              const projectPrefix = `client/projects/${context?.projectId || projectId}/`;
+              if (filePath.startsWith(projectPrefix)) {
+                cleanFilePath = filePath.substring(projectPrefix.length);
+              }
+              
+              // Remove leading slash if present
+              if (cleanFilePath.startsWith('/')) {
+                cleanFilePath = cleanFilePath.substring(1);
+              }
+              
+              // Since we're now running with cwd set to workspace, just use the clean path
+              console.log(`Reading file: ${cleanFilePath} from workspace`);
               const readResult = await readTool.handler({
-                path: fullPath
+                path: cleanFilePath
               });
               
-              if (readResult && typeof readResult === 'string') {
+              if (readResult && typeof readResult === 'string' && !readResult.startsWith('File not found')) {
                 affectedFilesContent[filePath] = {
                   content: readResult,
                   exists: true,
                   lines: readResult.split('\n').length
                 };
-                console.log(`Read file: ${filePath} (${affectedFilesContent[filePath].lines} lines)`);
+                console.log(`Successfully read: ${cleanFilePath} (${affectedFilesContent[filePath].lines} lines)`);
+              } else {
+                console.log(`File not found or empty: ${cleanFilePath}`);
               }
             } catch (e) {
               console.log(`Failed to read ${filePath}:`, e.message);
@@ -652,10 +685,12 @@ ${fileData.content}
 
 CRITICAL INSTRUCTIONS:
 - For files listed above, you MUST MODIFY the existing code, not create new files
-- Add the requested feature to the existing implementation
-- Preserve ALL existing functionality
-- Return the COMPLETE modified file content, not just the changes
+- PRESERVE ALL existing functionality - DO NOT REMOVE ANY EXISTING FEATURES
+- When adding new features: ADD to existing code, don't replace
+- When modifying features: ONLY change what's specifically requested
+- Return the COMPLETE modified file content with ALL original code PLUS the requested changes
 - Do NOT create a new file if one already exists - modify the existing one
+- Think carefully: What exists? What's being asked? How to merge both?
 ` : ''}
 
 ${mainFiles.length > 0 ? `Additional context from main files:

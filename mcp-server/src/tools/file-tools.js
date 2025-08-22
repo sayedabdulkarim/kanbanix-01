@@ -2,8 +2,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob';
 
-// Get project root (2 levels up from mcp-server/src)
-const PROJECT_ROOT = path.resolve(process.cwd(), '..');
+// Get project root - use the workspace path from environment or fallback
+const PROJECT_ROOT = process.env.WORKSPACE_PATH || path.resolve(process.cwd(), '..');
 
 // Security: Only allow access within project
 function validatePath(filePath) {

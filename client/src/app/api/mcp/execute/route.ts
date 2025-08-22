@@ -89,8 +89,10 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
       env: {
         ...process.env,
         MCP_MODE: 'desktop',
-        NODE_ENV: 'development'
-      }
+        NODE_ENV: 'development',
+        WORKSPACE_PATH: workspacePath
+      },
+      cwd: workspacePath // Set working directory to workspace
     });
 
     let output = '';
