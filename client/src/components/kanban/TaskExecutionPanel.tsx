@@ -825,6 +825,7 @@ export default function TaskExecutionPanel({
             {execution?.changes && projectId && (
               <DiffViewer 
                 projectId={projectId} 
+                taskId={task.id}  // V2: Pass taskId for task-specific diffs
                 changes={execution.changes} 
                 expandAll={expandAllDiffs}
               />

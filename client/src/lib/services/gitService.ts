@@ -35,6 +35,77 @@ class GitService {
   }
 
   /**
+   * Create a session branch name for V2 workflow
+   */
+  createSessionBranchName(projectId: string): string {
+    // Create session branch with project ID and timestamp
+    const timestamp = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const uniqueId = Date.now().toString().slice(-6);
+    
+    return `session/${projectId.substring(0, 8)}-${timestamp}-${uniqueId}`;
+  }
+
+  /**
+   * Create or get existing session branch for V2 workflow
+   */
+  async createOrGetSessionBranch(
+    workspacePath: string,
+    projectId: string
+  ): Promise<string> {
+    try {
+      // Clean up any git lock files first
+      try {
+        await execAsync('rm -f .git/index.lock', { cwd: workspacePath });
+      } catch (e) {
+        // Ignore if file doesn't exist
+      }
+
+      // Check if a session branch already exists
+      const { stdout: branchList } = await execAsync(
+        'git branch -a | grep "session/"',
+        { cwd: workspacePath }
+      ).catch(() => ({ stdout: '' }));
+
+      const existingSessionBranches = branchList
+        .split('\n')
+        .map(b => b.trim().replace('* ', ''))
+        .filter(b => b.startsWith('session/') && b.includes(projectId.substring(0, 8)));
+
+      if (existingSessionBranches.length > 0) {
+        // Use the most recent session branch
+        const sessionBranch = existingSessionBranches[0];
+        await execAsync(`git checkout ${sessionBranch}`, { cwd: workspacePath });
+        console.log(`Using existing session branch: ${sessionBranch}`);
+        return sessionBranch;
+      }
+
+      // No existing session branch, create new one
+      const sessionBranch = this.createSessionBranchName(projectId);
+
+      // First ensure we're on main
+      try {
+        await execAsync('git checkout main', { cwd: workspacePath });
+      } catch (mainError) {
+        // Try master if main doesn't exist
+        try {
+          await execAsync('git checkout master', { cwd: workspacePath });
+        } catch (masterError) {
+          console.log('No main/master branch, creating branch from current state');
+        }
+      }
+
+      // Create and checkout new session branch
+      await execAsync(`git checkout -b ${sessionBranch}`, { cwd: workspacePath });
+      console.log(`Created new session branch: ${sessionBranch}`);
+      
+      return sessionBranch;
+    } catch (error: any) {
+      console.error('Error creating session branch:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Create and checkout a new branch for a task
    */
   async createTaskBranch(
@@ -185,6 +256,40 @@ class GitService {
       if (error.message.includes('nothing to commit')) {
         throw new Error('No changes to commit');
       }
+      throw error;
+    }
+  }
+
+  /**
+   * Auto-commit task changes for V2 workflow
+   */
+  async autoCommitTask(
+    workspacePath: string,
+    taskId: string,
+    taskTitle: string,
+    files?: string[]
+  ): Promise<GitCommitInfo> {
+    // Format: [Task-{taskId}] {taskTitle}
+    const message = `[Task-${taskId.substring(0, 8)}] ${taskTitle}`;
+    
+    try {
+      // Check if there are changes to commit
+      const { stdout: statusOutput } = await execAsync(
+        'git status --porcelain',
+        { cwd: workspacePath }
+      );
+      
+      if (!statusOutput.trim()) {
+        throw new Error('No changes to commit');
+      }
+      
+      // Commit the changes
+      const commitInfo = await this.commitChanges(workspacePath, message, files);
+      console.log(`Auto-committed task changes: ${commitInfo.hash}`);
+      
+      return commitInfo;
+    } catch (error: any) {
+      console.error('Error auto-committing task:', error);
       throw error;
     }
   }
@@ -353,6 +458,68 @@ class GitService {
     } catch (error) {
       console.error('Error getting file diff:', error);
       return '';
+    }
+  }
+
+  /**
+   * Get diff between two commits (for V2 task-specific diffs)
+   */
+  async getDiffBetweenCommits(
+    workspacePath: string, 
+    fromCommit: string, 
+    toCommit: string
+  ): Promise<string> {
+    try {
+      // Use unified diff format with proper headers for parsing
+      const { stdout } = await execAsync(
+        `git diff --unified=3 ${fromCommit}..${toCommit}`,
+        { cwd: workspacePath }
+      );
+      return stdout;
+    } catch (error) {
+      console.error('Error getting diff between commits:', error);
+      return '';
+    }
+  }
+  
+  /**
+   * Get list of changed files in a commit
+   */
+  async getChangedFilesInCommit(workspacePath: string, commitSha: string): Promise<string[]> {
+    try {
+      const { stdout } = await execAsync(
+        `git diff-tree --no-commit-id --name-only -r ${commitSha}`,
+        { cwd: workspacePath }
+      );
+      return stdout.trim().split('\n').filter(f => f);
+    } catch (error) {
+      console.error('Error getting changed files:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get the commit before a specific commit (parent commit)
+   */
+  async getParentCommit(workspacePath: string, commitSha: string): Promise<string | null> {
+    try {
+      // First check if the commit exists
+      try {
+        await execAsync(`git rev-parse ${commitSha}`, { cwd: workspacePath });
+      } catch (e) {
+        console.log(`Commit ${commitSha} does not exist in repository`);
+        return null;
+      }
+      
+      // Now get the parent
+      const { stdout } = await execAsync(
+        `git rev-parse ${commitSha}^`,
+        { cwd: workspacePath }
+      );
+      return stdout.trim();
+    } catch (error) {
+      console.error('Error getting parent commit:', error);
+      return null;
     }
   }
 }

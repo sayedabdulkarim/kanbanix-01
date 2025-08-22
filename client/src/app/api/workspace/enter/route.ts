@@ -335,16 +335,15 @@ export async function POST(request: NextRequest) {
       console.warn('Git config warning:', configError);
     }
 
-    // Create task branch if task info provided
+    // V2: Create or use session branch instead of task-specific branches
     let branchName = 'main';
-    if (taskId && taskTitle) {
-      try {
-        branchName = await gitService.createTaskBranch(workspacePath, taskId, taskTitle);
-        console.log(`Created/checked out task branch: ${branchName}`);
-      } catch (branchError) {
-        console.error('Error creating task branch:', branchError);
-        // Continue on main branch if branch creation fails
-      }
+    try {
+      branchName = await gitService.createOrGetSessionBranch(workspacePath, projectId);
+      console.log(`Using session branch: ${branchName}`);
+    } catch (branchError) {
+      console.error('Error creating/getting session branch:', branchError);
+      // Continue on main branch if session branch creation fails
+      console.log('Falling back to main branch');
     }
 
     // Get current branch info

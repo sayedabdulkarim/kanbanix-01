@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, FileCode, Plus, Minus } from 'lucide-react';
 
 interface DiffViewerProps {
   projectId: string;
+  taskId?: string;  // V2: Support task-specific diffs
   changes?: any[];
   expandAll?: boolean;
 }
@@ -29,7 +30,7 @@ interface DiffLine {
   content: string;
 }
 
-export default function DiffViewer({ projectId, changes = [], expandAll }: DiffViewerProps) {
+export default function DiffViewer({ projectId, taskId, changes = [], expandAll }: DiffViewerProps) {
   const [diffs, setDiffs] = useState<FileDiff[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
@@ -41,7 +42,7 @@ export default function DiffViewer({ projectId, changes = [], expandAll }: DiffV
       // Fetch diffs for modified files
       fetchDiffs();
     }
-  }, [changes, projectId]);
+  }, [changes, projectId, taskId]);
   
   useEffect(() => {
     if (expandAll !== undefined) {
@@ -67,7 +68,11 @@ export default function DiffViewer({ projectId, changes = [], expandAll }: DiffV
   const fetchDiffs = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/workspace/diff?projectId=${projectId}`);
+      // V2: Support task-specific diffs
+      const url = taskId 
+        ? `/api/workspace/diff?projectId=${projectId}&taskId=${taskId}`
+        : `/api/workspace/diff?projectId=${projectId}`;
+      const response = await fetch(url);
       if (response.ok) {
         const data = await response.json();
         if (data.structuredDiff) {
@@ -151,7 +156,9 @@ export default function DiffViewer({ projectId, changes = [], expandAll }: DiffV
           const isExpanded = expandedFiles.has(change.path);
           const isLoadingContent = loadingContent.has(change.path);
           const hasContent = fileContents[change.path];
-          const matchingDiff = diffs.find(d => d.path === change.path);
+          // Normalize paths - remove leading slash from change.path to match git diff paths
+          const normalizedPath = change.path.startsWith('/') ? change.path.slice(1) : change.path;
+          const matchingDiff = diffs.find(d => d.path === normalizedPath || d.path === change.path);
           
           return (
             <div key={index} className="border rounded-lg overflow-hidden">

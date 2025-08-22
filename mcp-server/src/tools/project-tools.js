@@ -667,10 +667,15 @@ Determine what framework is being used and follow its patterns.
 🎁 Output Format:
 Return a single valid JSON object with file paths as keys and code content as values.
 
-🚫 Important:
-- Do NOT include explanations or markdown - ONLY JSON
-- Do NOT wrap the JSON in backticks or code blocks
-- Return ONLY the JSON object, nothing else
+🚫 CRITICAL JSON Requirements:
+- Return ONLY valid JSON - no markdown, no explanations, no code blocks
+- Do NOT wrap the JSON in backticks (\`\`\`) or any other formatting
+- PROPERLY ESCAPE all special characters in file content:
+  - Newlines must be \\n (not actual line breaks)
+  - Quotes must be \\" (not unescaped ")
+  - Backslashes must be \\\\ (not single \\)
+  - Tabs must be \\t (not actual tabs)
+- The entire response must be parseable by JSON.parse()
 
 ✅ Example Output (this is the EXACT format you must follow):
 {
@@ -710,116 +715,31 @@ Requirements:
           try {
             // Try direct parsing first (from SynthAI's task-based-generator.js)
             generatedCode = JSON.parse(responseText);
-            console.log('Direct JSON parse successful');
+            console.log('✅ Direct JSON parse successful');
           } catch (error) {
-            console.log('Direct parse failed, trying cleanup methods...');
+            console.log('⚠️ Direct parse failed, trying to extract JSON from response...');
             
-            // Try removing markdown formatting
-            const cleaned = responseText.replace(/```(json)?/g, "").trim();
+            // Simplified approach based on SynthAI's parseJSON method
+            // Try to extract JSON from the response
+            const jsonMatch = responseText.match(/```json\s*([\s\S]*?)```/) || 
+                             responseText.match(/\{[\s\S]*\}/);
             
-            // Find JSON object in the content
-            const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) {
-              throw new Error("No valid JSON found in response");
-            }
-            
-            try {
-              generatedCode = JSON.parse(jsonMatch[0]);
-              console.log('Cleaned JSON parse successful');
-            } catch (parseError) {
-              console.log('Cleaned parse failed, attempting advanced sanitization...');
-              
-              // Advanced sanitization from SynthAI
+            if (jsonMatch) {
               try {
-                // First attempt: Fix common JSON issues
-                let sanitized = jsonMatch[0]
-                  .replace(/\\\\/g, "\\\\\\\\")  // Fix backslashes
-                  .replace(/\\n/g, "\\\\n")      // Fix newlines
-                  .replace(/\\r/g, "\\\\r")      // Fix carriage returns
-                  .replace(/\\t/g, "\\\\t");     // Fix tabs
+                const jsonStr = jsonMatch[1] || jsonMatch[0];
+                console.log(`📝 Found JSON block, attempting to parse (length: ${jsonStr.length})...`);
+                generatedCode = JSON.parse(jsonStr);
+                console.log('✅ Extracted JSON parse successful');
+              } catch (parseError) {
+                console.error("❌ Failed to parse extracted JSON:", parseError);
+                console.error("Response preview (first 1000 chars):", responseText.substring(0, 1000));
                 
-                generatedCode = JSON.parse(sanitized);
-                console.log('Advanced sanitization successful');
-              } catch (sanitizeError) {
-                console.log('Advanced sanitization failed, using manual extraction...');
-                
-                // Manual extraction as last resort
-                generatedCode = {
-                  framework: 'nextjs',
-                  files: {},
-                  summary: 'Generated code for: ' + task_title,
-                  dependencies: []
-                };
-                
-                // Extract framework
-                const frameworkMatch = responseText.match(/"framework":\s*"([^"]+)"/);
-                if (frameworkMatch) {
-                  generatedCode.framework = frameworkMatch[1];
-                }
-                
-                // Extract summary
-                const summaryMatch = responseText.match(/"summary":\s*"([^"]+)"/);
-                if (summaryMatch) {
-                  generatedCode.summary = summaryMatch[1];
-                }
-                
-                // Try to extract files with better patterns
-                // Pattern 1: Standard JSON format with proper escaping
-                const fileRegex = /"(\/[^"]+\.[^"]+)":\s*"((?:[^"\\]|\\.)*)"/g;
-                let fileMatch;
-                
-                while ((fileMatch = fileRegex.exec(responseText)) !== null) {
-                  const filePath = fileMatch[1];
-                  let content = fileMatch[2];
-                  
-                  // Properly unescape the content
-                  content = content
-                    .replace(/\\n/g, '\n')
-                    .replace(/\\t/g, '\t')
-                    .replace(/\\r/g, '\r')
-                    .replace(/\\"/g, '"')
-                    .replace(/\\'/g, "'")
-                    .replace(/\\\\/g, '\\');
-                  
-                  generatedCode.files[filePath] = content;
-                  console.log(`Extracted file: ${filePath}`);
-                }
-                
-                // If no files found, try code block extraction
-                if (Object.keys(generatedCode.files).length === 0) {
-                  console.log('No files in JSON, trying code block extraction...');
-                  
-                  // Look for code blocks in the response
-                  const codeBlockRegex = /```(?:typescript|tsx|javascript|jsx|js|ts)\n([\s\S]*?)```/g;
-                  let blockMatch;
-                  let blockIndex = 0;
-                  
-                  while ((blockMatch = codeBlockRegex.exec(responseText)) !== null) {
-                    const code = blockMatch[1];
-                    let fileName;
-                    
-                    // Determine file name based on content
-                    if (code.includes('export default function Counter') || 
-                        code.includes('function Counter') || 
-                        code.includes('const Counter')) {
-                      // Check if it's TypeScript or JavaScript
-                      const isTypeScript = code.includes(': React.FC') || 
-                                         code.includes('interface') || 
-                                         code.includes(': number') ||
-                                         code.includes(': string');
-                      fileName = isTypeScript ? '/src/components/Counter.tsx' : '/src/components/Counter.js';
-                    } else if (code.includes('Counter') && code.includes('page')) {
-                      fileName = '/src/app/counter/page.js';
-                    } else {
-                      fileName = `/src/components/Component${blockIndex}.js`;
-                    }
-                    
-                    generatedCode.files[fileName] = code;
-                    console.log(`Extracted code block as: ${fileName}`);
-                    blockIndex++;
-                  }
-                }
+                // Instead of manual extraction, throw error to retry with better prompt
+                throw new Error(`Claude returned invalid JSON. The response may contain syntax errors or unescaped characters. Error: ${parseError.message}`);
               }
+            } else {
+              console.error("❌ No JSON found in response");
+              throw new Error("No valid JSON structure found in Claude's response. The response must be a valid JSON object.");
             }
           }
           

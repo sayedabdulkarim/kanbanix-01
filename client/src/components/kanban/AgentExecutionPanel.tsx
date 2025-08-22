@@ -344,7 +344,11 @@ export default function AgentExecutionPanel({ taskId, projectId, onClose, repoUr
           {/* Diff Viewer */}
           {showDiff && execution.changes && projectId && (
             <div className="mt-4">
-              <DiffViewer projectId={projectId} changes={execution.changes} />
+              <DiffViewer 
+                projectId={projectId} 
+                taskId={taskId}  // V2: Pass taskId for task-specific diffs
+                changes={execution.changes} 
+              />
             </div>
           )}
         </div>

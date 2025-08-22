@@ -254,21 +254,20 @@ export class AIAgentService {
     
     const input = JSON.parse(execution.input);
     
-    await this.updateProgress(executionId, 20, 'Creating task branch');
+    await this.updateProgress(executionId, 20, 'Preparing workspace');
     
-    // Create task-specific branch in workspace
+    // V2: Use session branch instead of creating task-specific branches
     try {
       const gitService = (await import('@/lib/services/gitService')).default;
-      const branchName = await gitService.createTaskBranch(
+      const sessionBranch = await gitService.createOrGetSessionBranch(
         input.context.workingDirectory || input.context.workspacePath,
-        execution.taskId,
-        input.title
+        execution.task.projectId
       );
-      console.log('Created task branch:', branchName);
-      await this.addExecutionLog(executionId, 'info', `Working on branch: ${branchName}`);
+      console.log('Using session branch:', sessionBranch);
+      await this.addExecutionLog(executionId, 'info', `Working on session branch: ${sessionBranch}`);
     } catch (error) {
-      console.warn('Could not create task branch, using main:', error);
-      await this.addExecutionLog(executionId, 'warning', 'Could not create branch, using main branch');
+      console.warn('Could not create/get session branch:', error);
+      await this.addExecutionLog(executionId, 'warning', 'Could not create session branch, using current branch');
     }
     
     await this.updateProgress(executionId, 30, 'Calling MCP server for code generation');
@@ -322,6 +321,33 @@ export class AIAgentService {
       } catch (error) {
         console.error('Error during build/server setup:', error);
         await this.addExecutionLog(executionId, 'warning', 'Could not start dev server automatically');
+      }
+    }
+    
+    // V2: Auto-commit changes after successful task completion
+    if (changes.length > 0) {
+      try {
+        await this.updateProgress(executionId, 95, 'Committing changes...');
+        const gitService = (await import('@/lib/services/gitService')).default;
+        const commitInfo = await gitService.autoCommitTask(
+          input.context.workingDirectory || input.context.workspacePath,
+          execution.taskId,
+          input.title
+        );
+        
+        // Store commit SHA in execution record
+        await this.prisma.agentExecution.update({
+          where: { id: executionId },
+          data: {
+            commitSha: commitInfo.hash
+          }
+        });
+        
+        await this.addExecutionLog(executionId, 'info', `✅ Changes committed: ${commitInfo.hash}`);
+        console.log(`Task auto-committed with SHA: ${commitInfo.hash}`);
+      } catch (commitError) {
+        console.warn('Could not auto-commit changes:', commitError);
+        await this.addExecutionLog(executionId, 'warning', 'Changes not committed automatically');
       }
     }
     

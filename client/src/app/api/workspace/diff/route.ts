@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('projectId');
     const filePath = searchParams.get('file');
+    const taskId = searchParams.get('taskId'); // V2: Support task-specific diffs
     
     if (!projectId) {
       return NextResponse.json({ error: 'Project ID required' }, { status: 400 });
@@ -40,6 +41,112 @@ export async function GET(request: NextRequest) {
     }
 
     const workspacePath = path.join(WORKSPACE_CONFIG.basePath, projectId);
+    
+    // V2: If taskId is provided, get task-specific diff
+    if (taskId) {
+      try {
+        // Get the task's execution to find its commit SHA
+        // Get ALL executions and find the first one with a valid commit
+        const executions = await prisma.agentExecution.findMany({
+          where: { 
+            taskId: taskId,
+            commitSha: { not: null }
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+        
+        // Find the first execution with a commit that exists in the repo
+        let execution = null;
+        for (const exec of executions) {
+          if (exec.commitSha) {
+            try {
+              // Check if commit exists
+              await gitService.getParentCommit(workspacePath, exec.commitSha);
+              execution = exec;
+              break;
+            } catch (e) {
+              console.log(`Skipping invalid commit ${exec.commitSha} for execution ${exec.id}`);
+            }
+          }
+        }
+
+        if (execution && execution.commitSha) {
+          try {
+            // Get the parent commit to diff against
+            const parentCommit = await gitService.getParentCommit(workspacePath, execution.commitSha);
+            
+            if (parentCommit) {
+              // Get diff between parent and task commit
+              const diff = await gitService.getDiffBetweenCommits(
+                workspacePath,
+                parentCommit,
+                execution.commitSha
+              );
+              
+              const structuredDiff = parseDiff(diff);
+              
+              return NextResponse.json({
+                success: true,
+                taskId,
+                commitSha: execution.commitSha,
+                parentCommit,
+                diff,
+                structuredDiff,
+                isTaskSpecific: true
+              });
+            }
+          } catch (parentError) {
+            console.log('Could not get parent commit, trying direct diff for commit:', execution.commitSha);
+            
+            // If parent commit fails, try to get diff for the specific commit
+            try {
+              const diff = await gitService.getDiffBetweenCommits(
+                workspacePath,
+                `${execution.commitSha}~1`,  // Use git's ~ notation for parent
+                execution.commitSha
+              );
+              
+              console.log(`Task diff for ${execution.commitSha}: ${diff.length} chars`);
+              
+              // Log first 500 chars of raw diff to see format
+              console.log('Raw diff preview:', diff.substring(0, 500));
+              
+              // Also get list of changed files to ensure we catch them all
+              const changedFiles = await gitService.getChangedFilesInCommit(workspacePath, execution.commitSha);
+              console.log(`Changed files in commit: ${changedFiles.join(', ')}`);
+              
+              const structuredDiff = parseDiff(diff);
+              console.log(`Parsed ${structuredDiff.length} files from diff`);
+              structuredDiff.forEach(file => {
+                console.log(`  - ${file.path}: ${file.hunks.length} hunks`);
+              });
+              
+              return NextResponse.json({
+                success: true,
+                taskId,
+                commitSha: execution.commitSha,
+                diff,
+                structuredDiff,
+                isTaskSpecific: true
+              });
+            } catch (diffError) {
+              console.error('Error getting commit diff:', diffError);
+              // Continue to fallback
+            }
+          }
+        }
+        
+        // Fallback if no commit found for task
+        return NextResponse.json({
+          success: false,
+          error: 'No commit found for this task',
+          taskId
+        });
+      } catch (error) {
+        console.error('Error getting task diff:', error);
+        // Fallback to regular diff
+      }
+    }
     
     if (filePath) {
       // Get diff for specific file
@@ -103,25 +210,37 @@ function parseDiff(diff: string): any[] {
   let currentFile: any = null;
   let currentHunk: any = null;
   
-  for (const line of lines) {
+  console.log(`Parsing diff with ${lines.length} lines`);
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
     if (line.startsWith('diff --git')) {
-      // New file
+      // New file - save previous file if exists
+      if (currentFile && currentFile.hunks.length > 0) {
+        console.log(`Adding file to diff: ${currentFile.path} with ${currentFile.hunks.length} hunks`);
+        files.push(currentFile);
+      }
+      
+      // Parse file paths from diff header
       const match = line.match(/diff --git a\/(.*) b\/(.*)/);
       if (match) {
-        if (currentFile) {
-          files.push(currentFile);
-        }
         currentFile = {
           path: match[2],
           hunks: []
         };
         currentHunk = null;
+        console.log(`Starting new file: ${currentFile.path}`);
       }
-    } else if (line.startsWith('+++')) {
-      // File path
+    } else if (line.startsWith('--- ')) {
+      // Old file path (for context, we don't use this)
+      continue;
+    } else if (line.startsWith('+++ ')) {
+      // New file path - update if different
       const match = line.match(/\+\+\+ b\/(.*)/);
       if (match && currentFile) {
         currentFile.path = match[1];
+        console.log(`Confirmed file path: ${currentFile.path}`);
       }
     } else if (line.startsWith('@@')) {
       // Hunk header
@@ -136,22 +255,29 @@ function parseDiff(diff: string): any[] {
           changes: []
         };
         currentFile.hunks.push(currentHunk);
+        console.log(`New hunk for ${currentFile.path}: @@ -${currentHunk.oldStart},${currentHunk.oldLines} +${currentHunk.newStart},${currentHunk.newLines} @@`);
       }
-    } else if (currentHunk) {
-      // Diff lines
-      if (line.startsWith('+')) {
+    } else if (currentHunk && currentFile) {
+      // Diff lines - only process if we have a current hunk
+      if (line.startsWith('+') && !line.startsWith('+++')) {
         currentHunk.changes.push({ type: 'add', content: line.substring(1) });
-      } else if (line.startsWith('-')) {
+      } else if (line.startsWith('-') && !line.startsWith('---')) {
         currentHunk.changes.push({ type: 'remove', content: line.substring(1) });
       } else if (line.startsWith(' ')) {
         currentHunk.changes.push({ type: 'context', content: line.substring(1) });
+      } else if (line === '') {
+        // Empty lines in diff are context lines
+        currentHunk.changes.push({ type: 'context', content: '' });
       }
     }
   }
   
-  if (currentFile) {
+  // Don't forget the last file
+  if (currentFile && currentFile.hunks.length > 0) {
+    console.log(`Adding final file to diff: ${currentFile.path} with ${currentFile.hunks.length} hunks`);
     files.push(currentFile);
   }
   
+  console.log(`Total files parsed: ${files.length}`);
   return files;
 }

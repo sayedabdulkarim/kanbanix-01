@@ -272,6 +272,10 @@ model AgentExecution {
   errors      String?  // JSON string with error details
   changes     String?  // JSON string with file changes
   
+  // V2: Git tracking
+  commitSha   String?  // Git commit SHA for this task's changes
+  filesChanged String? // JSON array of files modified
+  
   // Metadata
   mcpMode     String?  // desktop or api
   modelUsed   String?  // claude-3-opus-20240229, etc.
