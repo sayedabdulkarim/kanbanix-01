@@ -138,6 +138,28 @@ export async function POST(request: NextRequest) {
 
       console.log(`PR created: ${pr.html_url}`);
 
+      // Update SessionState with PR information
+      const sessionState = await prisma.sessionState.findFirst({
+        where: {
+          projectId,
+          userId: session.user.id,
+          isActive: true
+        }
+      });
+
+      if (sessionState) {
+        await prisma.sessionState.update({
+          where: { id: sessionState.id },
+          data: {
+            prCreated: true,
+            prUrl: pr.html_url,
+            prNumber: pr.number,
+            prTitle: pr.title,
+            prCreatedAt: new Date()
+          }
+        });
+      }
+
       // Step 3: Update task with PR info and move to In Review
       if (task) {
         // Find the "In Review" column for this project

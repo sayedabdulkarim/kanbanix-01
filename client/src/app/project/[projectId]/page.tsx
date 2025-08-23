@@ -59,11 +59,14 @@ export default function ProjectBoard() {
   const [executingTaskId, setExecutingTaskId] = useState<string | null>(null);
   const [taskExecutions, setTaskExecutions] = useState<Record<string, any>>({});
   
-  // Phase 2: State for Commit/PR buttons
+  // Phase 3: State for Commit/PR buttons and session management
+  const [sessionState, setSessionState] = useState<any>(null);
   const [hasUncommittedChanges, setHasUncommittedChanges] = useState(false);
   const [isCommitting, setIsCommitting] = useState(false);
   const [isCreatingPR, setIsCreatingPR] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
+  const [prCreated, setPrCreated] = useState(false);
+  const [totalCommitsInSession, setTotalCommitsInSession] = useState(0);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -127,6 +130,17 @@ export default function ProjectBoard() {
     }
   }, [params.projectId, status, router]);
 
+  // Poll for session state changes every 10 seconds
+  useEffect(() => {
+    if (!project?.id) return;
+
+    const interval = setInterval(() => {
+      fetchSessionState();
+    }, 10000); // Poll every 10 seconds
+
+    return () => clearInterval(interval);
+  }, [project?.id]);
+
   const initializeProject = async () => {
     try {
       setLoading(true);
@@ -137,10 +151,30 @@ export default function ProjectBoard() {
       // Then enter workspace
       await enterWorkspace();
       
+      // Fetch initial session state
+      await fetchSessionState();
+      
     } catch (error) {
       console.error('Error initializing project:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchSessionState = async () => {
+    try {
+      const response = await fetch(`/api/workspace/session?projectId=${params.projectId}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.exists && data.sessionState) {
+          setSessionState(data.sessionState);
+          setHasUncommittedChanges(data.sessionState.hasUncommittedChanges);
+          setPrCreated(data.sessionState.prCreated);
+          setTotalCommitsInSession(data.sessionState.totalCommitsInSession);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching session state:', error);
     }
   };
 
@@ -518,6 +552,8 @@ export default function ProjectBoard() {
       
       if (response.ok) {
         setHasUncommittedChanges(false);
+        // Refresh session state to get updated commit info
+        await fetchSessionState();
         alert('All changes committed successfully!');
       } else {
         const error = await response.json();
@@ -549,6 +585,9 @@ export default function ProjectBoard() {
       
       if (response.ok) {
         const data = await response.json();
+        setPrCreated(true);
+        // Refresh session state to get updated PR info
+        await fetchSessionState();
         alert(`Pull request created successfully! PR #${data.pullRequest?.number || ''}`);
         
         // Move all in-review tasks to done
@@ -657,10 +696,12 @@ export default function ProjectBoard() {
               {/* Phase 2: Board-level Commit and PR buttons */}
               <button
                 onClick={handleCommitAll}
-                disabled={isCommitting || tasks.filter(t => t.status === 'inReview').length === 0}
+                disabled={isCommitting || tasks.filter(t => t.status === 'inReview').length === 0 || !hasUncommittedChanges}
                 className="px-4 py-2 rounded-lg border border-border hover:bg-secondary transition-colors inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 title={tasks.filter(t => t.status === 'inReview').length === 0 
                   ? "No tasks in review to commit" 
+                  : !hasUncommittedChanges
+                  ? "No uncommitted changes"
                   : "Commit all reviewed tasks"}
               >
                 <GitCommit className="h-4 w-4" />
@@ -668,12 +709,14 @@ export default function ProjectBoard() {
               </button>
               <button
                 onClick={handleCreatePR}
-                disabled={isCreatingPR || hasUncommittedChanges || tasks.filter(t => t.status === 'inReview').length > 0}
+                disabled={isCreatingPR || hasUncommittedChanges || prCreated || totalCommitsInSession === 0}
                 className="px-4 py-2 rounded-lg border border-border hover:bg-secondary transition-colors inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                title={hasUncommittedChanges 
+                title={prCreated
+                  ? "PR already created for this session"
+                  : hasUncommittedChanges 
                   ? "Please commit changes first" 
-                  : tasks.filter(t => t.status === 'inReview').length > 0
-                  ? "Please commit all reviewed tasks first"
+                  : totalCommitsInSession === 0
+                  ? "No commits to create PR from"
                   : "Create pull request"}
               >
                 <GitPullRequest className="h-4 w-4" />
@@ -778,6 +821,13 @@ export default function ProjectBoard() {
                   );
                   // Also update selectedTaskForDetails to reflect the new status
                   setSelectedTaskForDetails(taskWithColumn);
+                  
+                  // Mark that we have uncommitted changes when task moves to review
+                  if (updatedTask.status === 'inReview') {
+                    setHasUncommittedChanges(true);
+                    // Also refresh session state to ensure consistency
+                    fetchSessionState();
+                  }
                 }}
               />
             ) : (
@@ -816,6 +866,13 @@ export default function ProjectBoard() {
                     t.id === taskWithColumn.id ? taskWithColumn : t
                   )
                 );
+                
+                // Mark that we have uncommitted changes when task moves to review
+                if (updatedTask.status === 'inReview') {
+                  setHasUncommittedChanges(true);
+                  // Also refresh session state to ensure consistency
+                  fetchSessionState();
+                }
               }}
             />
           </div>

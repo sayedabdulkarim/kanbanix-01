@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import prisma from '@/lib/prisma';
+import { authOptions } from '../../auth/[...nextauth]/route';
+import { PrismaClient } from '@prisma/client';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 
 const execAsync = promisify(exec);
+const prisma = new PrismaClient();
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,6 +29,18 @@ export async function POST(request: NextRequest) {
     const workspacePath = path.join(process.cwd(), 'projects', projectId);
 
     try {
+      // First check if there are any changes to commit
+      const { stdout: statusOutput } = await execAsync('git status --porcelain', { 
+        cwd: workspacePath 
+      });
+      
+      if (!statusOutput.trim()) {
+        return NextResponse.json(
+          { error: 'No changes to commit. Tasks may have been auto-committed previously.' },
+          { status: 400 }
+        );
+      }
+      
       // Stage all changes
       await execAsync('git add -A', { cwd: workspacePath });
       
@@ -64,6 +77,28 @@ export async function POST(request: NextRequest) {
         );
       }
       
+      // Update SessionState with commit information
+      const sessionState = await prisma.sessionState.findFirst({
+        where: {
+          projectId,
+          userId: session.user.id,
+          isActive: true
+        }
+      });
+      
+      if (sessionState) {
+        await prisma.sessionState.update({
+          where: { id: sessionState.id },
+          data: {
+            hasUncommittedChanges: false,
+            lastCommitSha: commitHash,
+            lastCommitMessage: message,
+            lastCommitAt: new Date(),
+            totalCommitsInSession: sessionState.totalCommitsInSession + 1
+          }
+        });
+      }
+      
       return NextResponse.json({
         success: true,
         commitHash,
@@ -73,14 +108,6 @@ export async function POST(request: NextRequest) {
       
     } catch (gitError: any) {
       console.error('Git commit error:', gitError);
-      
-      // Check if there are no changes to commit
-      if (gitError.message.includes('nothing to commit')) {
-        return NextResponse.json(
-          { error: 'No changes to commit' },
-          { status: 400 }
-        );
-      }
       
       return NextResponse.json(
         { error: 'Failed to commit changes', details: gitError.message },

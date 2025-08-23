@@ -449,6 +449,61 @@ class GitService {
   }
 
   /**
+   * Get diff for a specific file (uncommitted changes)
+   */
+  async getDiffForFile(workspacePath: string, filePath: string): Promise<string> {
+    try {
+      // Remove leading slash if present
+      const cleanPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+      
+      console.log(`[gitService.getDiffForFile] Getting diff for: ${cleanPath}`);
+      
+      // First check if file is tracked by git
+      try {
+        const { stdout: lsFilesOutput } = await execAsync(
+          `git ls-files "${cleanPath}"`,
+          { cwd: workspacePath }
+        );
+        
+        const isTracked = lsFilesOutput.trim().length > 0;
+        console.log(`[gitService.getDiffForFile] File ${cleanPath} tracked: ${isTracked}`);
+        
+        if (!isTracked) {
+          // File is not tracked - it's a new file
+          // Add it with -N flag to make it show in diff
+          console.log(`[gitService.getDiffForFile] Adding untracked file with -N flag`);
+          await execAsync(`git add -N "${cleanPath}"`, { cwd: workspacePath });
+        }
+      } catch (e) {
+        console.log(`[gitService.getDiffForFile] Error checking if file is tracked: ${e}`);
+      }
+      
+      // Get both staged and unstaged changes for the file
+      const { stdout: unstagedDiff } = await execAsync(
+        `git diff -- "${cleanPath}"`, 
+        { cwd: workspacePath }
+      );
+      
+      const { stdout: stagedDiff } = await execAsync(
+        `git diff --cached -- "${cleanPath}"`, 
+        { cwd: workspacePath }
+      );
+      
+      console.log(`[gitService.getDiffForFile] Unstaged diff length: ${unstagedDiff.length}, Staged diff length: ${stagedDiff.length}`);
+      
+      // Combine both diffs if both exist
+      if (unstagedDiff && stagedDiff) {
+        return `${stagedDiff}\n${unstagedDiff}`;
+      }
+      
+      return unstagedDiff || stagedDiff || '';
+    } catch (error) {
+      console.error(`[gitService.getDiffForFile] Error getting diff for file ${filePath}:`, error);
+      return '';
+    }
+  }
+
+  /**
    * Get diff for a specific file
    */
   async getFileDiff(workspacePath: string, filePath: string): Promise<string> {

@@ -67,6 +67,7 @@ model User {
   tasks         Task[]    @relation("TaskAssignee")
   comments      Comment[]
   activities    Activity[]
+  sessionStates SessionState[]
   
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -93,6 +94,7 @@ model Project {
   columns       Column[]
   tasks         Task[]
   webhooks      Webhook[]
+  sessionStates SessionState[]
   
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -310,4 +312,47 @@ model AgentLog {
   
   @@index([executionId])
   @@index([timestamp])
+}
+
+// Session state for tracking workspace and git state (V2 Phase 3)
+model SessionState {
+  id                      String    @id @default(cuid())
+  
+  // Project and user relation
+  projectId               String
+  project                 Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId                  String
+  user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Session branch info
+  sessionBranch           String    // The session branch name (e.g., session/proj-2025-01-01-123456)
+  baseBranch              String    @default("main") // The base branch (main/master)
+  
+  // Commit state
+  hasUncommittedChanges   Boolean   @default(false)
+  lastCommitSha           String?   // Last commit SHA in this session
+  lastCommitMessage       String?   // Last commit message
+  lastCommitAt            DateTime? // When the last commit was made
+  totalCommitsInSession   Int       @default(0) // Count of commits in this session
+  
+  // PR state
+  prCreated               Boolean   @default(false)
+  prUrl                   String?   // GitHub PR URL
+  prNumber                Int?      // GitHub PR number
+  prTitle                 String?   // PR title
+  prCreatedAt             DateTime? // When PR was created
+  prMerged                Boolean   @default(false)
+  prMergedAt              DateTime? // When PR was merged
+  
+  // Session metadata
+  isActive                Boolean   @default(true) // Whether this is the active session
+  workspacePath           String?   // Physical workspace path on server
+  
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  
+  @@unique([projectId, userId, isActive]) // Only one active session per project per user
+  @@index([projectId])
+  @@index([userId])
+  @@index([sessionBranch])
 }

@@ -42,106 +42,118 @@ export async function GET(request: NextRequest) {
 
     const workspacePath = path.join(WORKSPACE_CONFIG.basePath, projectId);
     
-    // V2: If taskId is provided, get task-specific diff
+    // V2 Phase 3: If taskId is provided, get task-specific diff from filesChanged
     if (taskId) {
       try {
-        // Get the task's execution to find its commit SHA
-        // Get ALL executions and find the first one with a valid commit
-        const executions = await prisma.agentExecution.findMany({
+        // First try to get the latest execution for this task
+        const execution = await prisma.agentExecution.findFirst({
           where: { 
             taskId: taskId,
-            commitSha: { not: null }
+            status: { in: ['completed', 'running'] }
           },
           orderBy: { createdAt: 'desc' }
         });
         
-        // Find the first execution with a commit that exists in the repo
-        let execution = null;
-        for (const exec of executions) {
-          if (exec.commitSha) {
-            try {
-              // Check if commit exists
-              await gitService.getParentCommit(workspacePath, exec.commitSha);
-              execution = exec;
-              break;
-            } catch (e) {
-              console.log(`Skipping invalid commit ${exec.commitSha} for execution ${exec.id}`);
-            }
-          }
-        }
-
-        if (execution && execution.commitSha) {
+        // If we have an execution with filesChanged, show diff for those files
+        if (execution && execution.filesChanged) {
           try {
-            // Get the parent commit to diff against
-            const parentCommit = await gitService.getParentCommit(workspacePath, execution.commitSha);
+            const filesChanged = JSON.parse(execution.filesChanged);
+            console.log(`[DIFF] Task ${taskId} has filesChanged:`, filesChanged);
             
-            if (parentCommit) {
-              // Get diff between parent and task commit
-              const diff = await gitService.getDiffBetweenCommits(
-                workspacePath,
-                parentCommit,
-                execution.commitSha
-              );
+            // Get diff for the specific files changed by this task
+            // This will show the current uncommitted changes for these files
+            let taskDiff = '';
+            let fileDetails = [];
+            
+            for (const file of filesChanged) {
+              console.log(`[DIFF] Getting diff for file: ${file}`);
+              const fileDiff = await gitService.getDiffForFile(workspacePath, file);
               
-              const structuredDiff = parseDiff(diff);
+              if (fileDiff) {
+                console.log(`[DIFF] Found diff for ${file}: ${fileDiff.length} chars`);
+                taskDiff += fileDiff + '\n';
+                fileDetails.push({ file, diffLength: fileDiff.length });
+              } else {
+                console.log(`[DIFF] No diff found for ${file} - file may be new/untracked`);
+                // For new files, we need to show them differently
+                // Check if file exists but is untracked
+                const fs = require('fs').promises;
+                const filePath = path.join(workspacePath, file.startsWith('/') ? file.substring(1) : file);
+                
+                try {
+                  await fs.access(filePath);
+                  // File exists, might be untracked - add it to git index to see diff
+                  const { exec } = require('child_process');
+                  const { promisify } = require('util');
+                  const execAsync = promisify(exec);
+                  
+                  // Add file to index temporarily to get diff
+                  await execAsync(`git add -N "${file.startsWith('/') ? file.substring(1) : file}"`, { cwd: workspacePath });
+                  
+                  // Now try to get diff again
+                  const newFileDiff = await gitService.getDiffForFile(workspacePath, file);
+                  if (newFileDiff) {
+                    console.log(`[DIFF] Got diff for new file ${file}: ${newFileDiff.length} chars`);
+                    taskDiff += newFileDiff + '\n';
+                    fileDetails.push({ file, diffLength: newFileDiff.length, isNew: true });
+                  }
+                } catch (e) {
+                  console.log(`[DIFF] File ${file} doesn't exist or can't be accessed`);
+                }
+              }
+            }
+            
+            console.log(`[DIFF] Total diff length: ${taskDiff.length}, files with diffs: ${fileDetails.length}`);
+            
+            if (taskDiff) {
+              const structuredDiff = parseDiff(taskDiff);
+              console.log(`[DIFF] Parsed ${structuredDiff.length} files from diff`);
               
               return NextResponse.json({
                 success: true,
                 taskId,
-                commitSha: execution.commitSha,
-                parentCommit,
-                diff,
+                filesChanged,
+                fileDetails,
+                diff: taskDiff,
                 structuredDiff,
-                isTaskSpecific: true
+                isTaskSpecific: true,
+                isUncommitted: true
               });
+            } else {
+              console.log(`[DIFF] No diffs found for any files`);
             }
-          } catch (parentError) {
-            console.log('Could not get parent commit, trying direct diff for commit:', execution.commitSha);
-            
-            // If parent commit fails, try to get diff for the specific commit
-            try {
-              const diff = await gitService.getDiffBetweenCommits(
-                workspacePath,
-                `${execution.commitSha}~1`,  // Use git's ~ notation for parent
-                execution.commitSha
-              );
-              
-              console.log(`Task diff for ${execution.commitSha}: ${diff.length} chars`);
-              
-              // Log first 500 chars of raw diff to see format
-              console.log('Raw diff preview:', diff.substring(0, 500));
-              
-              // Also get list of changed files to ensure we catch them all
-              const changedFiles = await gitService.getChangedFilesInCommit(workspacePath, execution.commitSha);
-              console.log(`Changed files in commit: ${changedFiles.join(', ')}`);
-              
-              const structuredDiff = parseDiff(diff);
-              console.log(`Parsed ${structuredDiff.length} files from diff`);
-              structuredDiff.forEach(file => {
-                console.log(`  - ${file.path}: ${file.hunks.length} hunks`);
-              });
-              
-              return NextResponse.json({
-                success: true,
-                taskId,
-                commitSha: execution.commitSha,
-                diff,
-                structuredDiff,
-                isTaskSpecific: true
-              });
-            } catch (diffError) {
-              console.error('Error getting commit diff:', diffError);
-              // Continue to fallback
-            }
+          } catch (error) {
+            console.log('Error getting diff for task files:', error);
           }
         }
         
-        // Fallback if no commit found for task
-        return NextResponse.json({
-          success: false,
-          error: 'No commit found for this task',
-          taskId
-        });
+        // Fallback: If no filesChanged, try to get all uncommitted changes
+        // This handles the case where task executed but filesChanged wasn't stored
+        const uncommittedDiff = await gitService.getDiff(workspacePath, filePath);
+        
+        if (uncommittedDiff) {
+          const structuredDiff = parseDiff(uncommittedDiff);
+          
+          return NextResponse.json({
+            success: true,
+            taskId,
+            diff: uncommittedDiff,
+            structuredDiff,
+            isTaskSpecific: false,
+            isUncommitted: true
+          });
+        } else {
+          // No changes to show
+          return NextResponse.json({
+            success: true,
+            taskId,
+            diff: '',
+            structuredDiff: [],
+            isTaskSpecific: true,
+            isUncommitted: true,
+            message: 'No uncommitted changes for this task'
+          });
+        }
       } catch (error) {
         console.error('Error getting task diff:', error);
         // Fallback to regular diff

@@ -365,30 +365,40 @@ export class AIAgentService {
       }
     }
     
-    // V2: Auto-commit changes after successful task completion
+    // V2 Phase 3: NO auto-commit - changes will be committed via "Commit All" button
+    // Track that we have uncommitted changes for this task
     if (changes.length > 0) {
       try {
-        await this.updateProgress(executionId, 95, 'Committing changes...');
-        const gitService = (await import('@/lib/services/gitService')).default;
-        const commitInfo = await gitService.autoCommitTask(
-          input.context.workingDirectory || input.context.workspacePath,
-          execution.taskId,
-          input.title
-        );
-        
-        // Store commit SHA in execution record
-        await this.prisma.agentExecution.update({
-          where: { id: executionId },
-          data: {
-            commitSha: commitInfo.hash
+        // Update session state to indicate uncommitted changes
+        const sessionState = await this.prisma.sessionState.findFirst({
+          where: {
+            projectId: execution.task.projectId,
+            isActive: true
           }
         });
         
-        await this.addExecutionLog(executionId, 'info', `✅ Changes committed: ${commitInfo.hash}`);
-        console.log(`Task auto-committed with SHA: ${commitInfo.hash}`);
-      } catch (commitError) {
-        console.warn('Could not auto-commit changes:', commitError);
-        await this.addExecutionLog(executionId, 'warning', 'Changes not committed automatically');
+        if (sessionState) {
+          await this.prisma.sessionState.update({
+            where: { id: sessionState.id },
+            data: {
+              hasUncommittedChanges: true
+            }
+          });
+        }
+        
+        // Store the files changed in the execution record (for dependency tracking)
+        const filesChanged = changes.map(c => c.path);
+        await this.prisma.agentExecution.update({
+          where: { id: executionId },
+          data: {
+            filesChanged: JSON.stringify(filesChanged)
+          }
+        });
+        
+        await this.addExecutionLog(executionId, 'info', `✅ Code generated - ${changes.length} files changed. Use "Commit All" to commit.`);
+        console.log(`Task completed with ${changes.length} files changed. Waiting for manual commit.`);
+      } catch (error) {
+        console.warn('Could not update session state:', error);
       }
     }
     

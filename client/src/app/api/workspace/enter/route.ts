@@ -349,8 +349,39 @@ export async function POST(request: NextRequest) {
     // Get current branch info
     const branchInfo = await gitService.getBranchInfo(workspacePath);
 
-    // Store workspace info in session/cache (you might want to use Redis or similar)
-    // For now, we'll return the path and let the client manage it
+    // Initialize or update SessionState
+    try {
+      // Deactivate any existing active sessions
+      await prisma.sessionState.updateMany({
+        where: {
+          projectId,
+          userId: session.user.id,
+          isActive: true
+        },
+        data: {
+          isActive: false
+        }
+      });
+
+      // Create new SessionState for this session
+      await prisma.sessionState.create({
+        data: {
+          projectId,
+          userId: session.user.id,
+          sessionBranch: branchName,
+          baseBranch: 'main',
+          workspacePath,
+          isActive: true,
+          hasUncommittedChanges: branchInfo.hasUncommittedChanges,
+          totalCommitsInSession: 0
+        }
+      });
+      
+      console.log('SessionState initialized for project:', projectId);
+    } catch (sessionError) {
+      console.error('Error initializing SessionState:', sessionError);
+      // Don't fail the workspace enter if session state fails
+    }
 
     // Release lock on success
     workspaceLocks.delete(projectId);
