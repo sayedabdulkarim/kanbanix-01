@@ -20,25 +20,70 @@ const devServers = new Map<string, {
   status: 'starting' | 'running' | 'error';
 }>();
 
-// Find an available port
-async function findAvailablePort(startPort: number = 3001): Promise<number> {
-  return new Promise((resolve) => {
-    const checkPort = (port: number) => {
+// Get the main app's port from environment or URL
+function getMainAppPort(): number {
+  // Try to get from environment variable
+  if (process.env.PORT) {
+    return parseInt(process.env.PORT);
+  }
+  
+  // Default to 3000 for Next.js apps
+  return 3000;
+}
+
+// Find an available port, with safety limits
+async function findAvailablePort(startPort: number = 4001): Promise<number> {
+  const maxPort = 9999; // Maximum port to try
+  const mainAppPort = getMainAppPort();
+  
+  // Common development ports to avoid, including the main app port
+  const commonPorts = [
+    mainAppPort, // Main Kanbanix app port
+    3000, 3001, 3002, 3003, // Common Next.js/React
+    4000, 4200, // Angular
+    5000, 5001, 5173, 5174, // Vite
+    8000, 8080, 8081, 8082, // Common backend/Java
+    9000, 9001 // Play framework
+  ];
+  
+  return new Promise((resolve, reject) => {
+    const checkPort = async (port: number) => {
+      // Safety check to prevent infinite loop
+      if (port > maxPort) {
+        // Try a random port in high range
+        port = Math.floor(Math.random() * (9999 - 9500) + 9500);
+      }
+      
+      // Skip common development ports to reduce conflicts
+      if (commonPorts.includes(port)) {
+        console.log(`Skipping reserved/common port ${port}`);
+        checkPort(port + 1);
+        return;
+      }
+      
       const server = net.createServer();
       
-      server.once('error', () => {
-        // Port is busy, try next
-        checkPort(port + 1);
+      server.once('error', (err: any) => {
+        if (err.code === 'EADDRINUSE') {
+          // Port is busy, try next
+          console.log(`Port ${port} is in use, trying ${port + 1}`);
+          checkPort(port + 1);
+        } else {
+          reject(err);
+        }
       });
       
       server.once('listening', () => {
-        server.close();
-        resolve(port);
+        server.close(() => {
+          console.log(`Found available port: ${port}`);
+          resolve(port);
+        });
       });
       
       server.listen(port, '127.0.0.1');
     };
     
+    // Start checking from the specified port
     checkPort(startPort);
   });
 }
@@ -129,10 +174,12 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Don't specify port upfront - let the dev server choose
-    // Most Next.js/React apps will auto-detect an available port
-    let port = 3000; // Default expected port
-    let url = `http://localhost:${port}`;
+    // Find an available port starting from 4001 to avoid common development ports
+    // This will skip ports like 3000, 3001, 4000, 4200, 5000, 5173, 8000, 8080 etc.
+    const port = await findAvailablePort(4001);
+    const url = `http://localhost:${port}`;
+    
+    console.log(`Found available port: ${port} for project ${projectId}`);
 
     // Detect package manager
     let command = 'npm';
@@ -152,7 +199,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    console.log(`Starting dev server: ${command} ${args.join(' ')} in ${workspacePath}`);
+    console.log(`Starting dev server: ${command} ${args.join(' ')} on port ${port} in ${workspacePath}`);
 
     // Log to execution if provided
     if (executionId) {
@@ -166,14 +213,18 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Start dev server process
+    // Start dev server process with the specific port
     const devProcess = spawn(command, args, {
       cwd: workspacePath,
       env: {
         ...process.env,
         NODE_ENV: 'development',
-        BROWSER: 'none' // Prevent auto-opening browser
-        // Don't set PORT - let the dev server auto-detect available port
+        PORT: port.toString(), // Force the dev server to use our assigned port
+        BROWSER: 'none', // Prevent auto-opening browser
+        // Also set common port env vars for different frameworks
+        VITE_PORT: port.toString(),
+        NUXT_PORT: port.toString(),
+        VUE_PORT: port.toString()
       },
       shell: true
     });

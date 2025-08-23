@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState, useCallback } from 'react';
-import { ArrowLeft, Plus, Loader2, RefreshCw, GitBranch, GitCommit, GitPullRequest, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Plus, Loader2, RefreshCw, GitBranch, GitCommit, GitPullRequest, ExternalLink, PowerOff } from 'lucide-react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import workspaceService from '@/lib/services/workspaceService';
@@ -71,6 +71,7 @@ export default function ProjectBoard() {
   
   // Phase 4: Modal states
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
+  const [isEndingSession, setIsEndingSession] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -129,21 +130,23 @@ export default function ProjectBoard() {
       return;
     }
     
-    if (status === 'authenticated' && params.projectId) {
+    if (status === 'authenticated' && params.projectId && !isEndingSession) {
       initializeProject();
     }
   }, [params.projectId, status, router]);
 
   // Poll for session state changes every 10 seconds
   useEffect(() => {
-    if (!project?.id) return;
+    if (!project?.id || isEndingSession) return;
 
     const interval = setInterval(() => {
-      fetchSessionState();
+      if (!isEndingSession) {
+        fetchSessionState();
+      }
     }, 10000); // Poll every 10 seconds
 
     return () => clearInterval(interval);
-  }, [project?.id]);
+  }, [project?.id, isEndingSession]);
 
   const initializeProject = async () => {
     try {
@@ -657,6 +660,47 @@ export default function ProjectBoard() {
     }
   };
 
+  // Handle End Session - cleanup and return to home
+  const handleEndSession = async () => {
+    const confirmed = confirm(
+      'End this session?\n\n' +
+      '• Any running dev servers will be stopped\n' +
+      '• The workspace will be deleted\n' +
+      '• Tasks in progress will be reset to TODO\n' +
+      '• You will be redirected to the home page\n\n' +
+      'This ensures a fresh start next time you open this project.'
+    );
+    
+    if (!confirmed) return;
+    
+    try {
+      // Set flag to stop all polling and workspace operations
+      setIsEndingSession(true);
+      setWorkspaceLoading(true);
+      
+      // First, redirect to prevent any further workspace operations
+      // This prevents re-cloning while the cleanup is happening
+      router.push('/');
+      
+      // Then call the cleanup endpoint
+      const response = await fetch('/api/workspace/end-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project?.id })
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('Session ended successfully:', result);
+      } else {
+        const error = await response.json();
+        console.error('Failed to end session:', error.message || 'Unknown error');
+      }
+    } catch (error) {
+      console.error('Error ending session:', error);
+    }
+  };
+
   // Handle Update PR (push new commits)
   const handleUpdatePR = async () => {
     if (!project) return;
@@ -779,6 +823,18 @@ export default function ProjectBoard() {
             </div>
             
             <div className="flex items-center gap-2">
+              {/* End Session button */}
+              <button
+                onClick={handleEndSession}
+                disabled={workspaceLoading}
+                className="p-2 rounded-lg hover:bg-destructive/10 text-destructive transition-colors disabled:opacity-50"
+                title="End session and cleanup workspace"
+              >
+                <PowerOff className="h-5 w-5" />
+              </button>
+              
+              <div className="w-px h-6 bg-border" /> {/* Separator */}
+              
               <button
                 onClick={refreshWorkspace}
                 disabled={workspaceLoading}
