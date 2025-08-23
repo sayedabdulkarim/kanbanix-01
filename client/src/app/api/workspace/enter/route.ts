@@ -351,33 +351,44 @@ export async function POST(request: NextRequest) {
 
     // Initialize or update SessionState
     try {
-      // Deactivate any existing active sessions
-      await prisma.sessionState.updateMany({
+      // First, find any existing active session
+      const existingSession = await prisma.sessionState.findFirst({
         where: {
           projectId,
           userId: session.user.id,
           isActive: true
-        },
-        data: {
-          isActive: false
         }
       });
 
-      // Create new SessionState for this session
-      await prisma.sessionState.create({
-        data: {
-          projectId,
-          userId: session.user.id,
-          sessionBranch: branchName,
-          baseBranch: 'main',
-          workspacePath,
-          isActive: true,
-          hasUncommittedChanges: branchInfo.hasUncommittedChanges,
-          totalCommitsInSession: 0
-        }
-      });
-      
-      console.log('SessionState initialized for project:', projectId);
+      if (existingSession) {
+        // Update existing session with new branch info
+        await prisma.sessionState.update({
+          where: { id: existingSession.id },
+          data: {
+            sessionBranch: branchName,
+            baseBranch: 'main',
+            workspacePath,
+            hasUncommittedChanges: branchInfo.hasUncommittedChanges,
+            updatedAt: new Date()
+          }
+        });
+        console.log('SessionState updated for project:', projectId);
+      } else {
+        // Create new SessionState for this session
+        await prisma.sessionState.create({
+          data: {
+            projectId,
+            userId: session.user.id,
+            sessionBranch: branchName,
+            baseBranch: 'main',
+            workspacePath,
+            isActive: true,
+            hasUncommittedChanges: branchInfo.hasUncommittedChanges,
+            totalCommitsInSession: 0
+          }
+        });
+        console.log('SessionState created for project:', projectId);
+      }
     } catch (sessionError) {
       console.error('Error initializing SessionState:', sessionError);
       // Don't fail the workspace enter if session state fails

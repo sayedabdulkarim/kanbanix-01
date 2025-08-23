@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState, useCallback } from 'react';
-import { ArrowLeft, Plus, Loader2, RefreshCw, GitBranch, GitCommit, GitPullRequest } from 'lucide-react';
+import { ArrowLeft, Plus, Loader2, RefreshCw, GitBranch, GitCommit, GitPullRequest, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import workspaceService from '@/lib/services/workspaceService';
@@ -31,6 +31,7 @@ import TaskCard from '@/components/kanban/TaskCard';
 import TaskModal from '@/components/kanban/TaskModal';
 import TaskDetailsSplitView from '@/components/kanban/TaskDetailsSplitView';
 import TaskExecutionPanel from '@/components/kanban/TaskExecutionPanel';
+import CommitModal from '@/components/modals/CommitModal';
 
 interface ProjectData {
   id: string;
@@ -67,6 +68,9 @@ export default function ProjectBoard() {
   const [commitMessage, setCommitMessage] = useState('');
   const [prCreated, setPrCreated] = useState(false);
   const [totalCommitsInSession, setTotalCommitsInSession] = useState(0);
+  
+  // Phase 4: Modal states
+  const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -171,11 +175,13 @@ export default function ProjectBoard() {
           setHasUncommittedChanges(data.sessionState.hasUncommittedChanges);
           setPrCreated(data.sessionState.prCreated);
           setTotalCommitsInSession(data.sessionState.totalCommitsInSession);
+          return data.sessionState;
         }
       }
     } catch (error) {
       console.error('Error fetching session state:', error);
     }
+    return null;
   };
 
   const enterWorkspace = async () => {
@@ -522,10 +528,19 @@ export default function ProjectBoard() {
     setSelectedTaskForDetails(task);
   };
 
-  // Phase 2: Handle Commit All functionality
-  const handleCommitAll = async () => {
+  // Phase 2: Handle Commit All functionality - Updated to use modal
+  const handleCommitAll = async (customMessage?: string) => {
+    console.log('handleCommitAll called with:', customMessage);
     if (!project) return;
     
+    // If no custom message provided, open modal
+    if (!customMessage) {
+      console.log('Opening commit modal');
+      setIsCommitModalOpen(true);
+      return;
+    }
+    
+    console.log('Processing commit with message:', customMessage);
     setIsCommitting(true);
     try {
       // Get all tasks in review
@@ -536,32 +551,36 @@ export default function ProjectBoard() {
         return;
       }
       
-      // Create commit message with all task titles
-      const taskTitles = tasksInReview.map(t => `- ${t.title}`).join('\n');
-      const message = `feat: Complete multiple tasks\n\n${taskTitles}`;
+      console.log('Calling /api/workspace/commit-all with:', {
+        projectId: project.id,
+        message: customMessage,
+        taskIds: tasksInReview.map(t => t.id)
+      });
       
       const response = await fetch('/api/workspace/commit-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectId: project.id,
-          message,
+          message: customMessage,
           taskIds: tasksInReview.map(t => t.id)
         })
       });
       
       if (response.ok) {
         setHasUncommittedChanges(false);
+        setIsCommitModalOpen(false);
         // Refresh session state to get updated commit info
         await fetchSessionState();
-        alert('All changes committed successfully!');
+        // Show success toast instead of alert
+        console.log('All changes committed successfully!');
       } else {
         const error = await response.json();
-        alert(`Failed to commit: ${error.message || 'Unknown error'}`);
+        throw new Error(error.message || 'Failed to commit changes');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Commit error:', error);
-      alert('Failed to commit changes');
+      throw error; // Let modal handle the error
     } finally {
       setIsCommitting(false);
     }
@@ -588,21 +607,16 @@ export default function ProjectBoard() {
         setPrCreated(true);
         // Refresh session state to get updated PR info
         await fetchSessionState();
-        alert(`Pull request created successfully! PR #${data.pullRequest?.number || ''}`);
         
-        // Move all in-review tasks to done
-        const inReviewTasks = tasks.filter(t => t.status === 'inReview');
-        const doneColumn = project.columns.find(c => c.status === 'done' || c.name.toLowerCase() === 'done');
-        
-        if (doneColumn) {
-          setTasks(prevTasks => 
-            prevTasks.map(t => 
-              inReviewTasks.find(rt => rt.id === t.id) 
-                ? { ...t, status: 'done', columnId: doneColumn.id }
-                : t
-            )
-          );
+        // Open PR URL in new tab
+        if (data.pullRequest?.url) {
+          window.open(data.pullRequest.url, '_blank');
         }
+        
+        console.log(`Pull request created successfully! PR #${data.pullRequest?.number || ''}`);
+        
+        // Don't auto-move tasks to done - wait for PR merge
+        // Tasks stay in review until PR is actually merged
       } else {
         const error = await response.json();
         alert(`Failed to create PR: ${error.message || 'Unknown error'}`);
@@ -642,6 +656,87 @@ export default function ProjectBoard() {
       alert('Failed to update task. Please try again.');
     }
   };
+
+  // Handle Update PR (push new commits)
+  const handleUpdatePR = async () => {
+    if (!project) return;
+    
+    setIsCreatingPR(true);
+    try {
+      const response = await fetch('/api/workspace/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: project.id,
+          branch: sessionState?.sessionBranch
+        })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        // Refresh session state to get updated timestamps
+        const updatedSession = await fetchSessionState();
+        // Open PR to show updates
+        const prUrl = updatedSession?.prUrl || sessionState?.prUrl;
+        if (prUrl) {
+          window.open(prUrl, '_blank');
+        }
+        console.log('PR updated with new commits!');
+      } else {
+        const error = await response.json();
+        alert(`Failed to update PR: ${error.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error updating PR:', error);
+      alert('Failed to update pull request');
+    } finally {
+      setIsCreatingPR(false);
+    }
+  };
+  
+  // Phase 4: Determine PR button state
+  const getPRButtonState = () => {
+    if (!sessionState?.prCreated) {
+      return {
+        text: 'Create PR',
+        action: handleCreatePR,
+        disabled: isCreatingPR || hasUncommittedChanges || totalCommitsInSession === 0,
+        tooltip: hasUncommittedChanges 
+          ? 'Please commit changes first' 
+          : totalCommitsInSession === 0
+          ? 'No commits to create PR from'
+          : 'Create pull request'
+      };
+    }
+    
+    // PR exists - check if there are new commits
+    const hasNewCommits = sessionState.lastCommitAt > sessionState.prCreatedAt;
+    
+    if (hasNewCommits) {
+      return {
+        text: 'Update PR',
+        action: handleUpdatePR,
+        disabled: isCreatingPR || hasUncommittedChanges,
+        tooltip: hasUncommittedChanges 
+          ? 'Please commit changes first'
+          : 'Push new commits to existing PR'
+      };
+    }
+    
+    // No new commits - just view PR
+    return {
+      text: 'View PR',
+      action: () => {
+        if (sessionState?.prUrl) {
+          window.open(sessionState.prUrl, '_blank');
+        }
+      },
+      disabled: false,
+      tooltip: 'Open pull request in GitHub'
+    };
+  };
+  
+  const prButtonState = getPRButtonState();
 
   return (
     <div className="min-h-screen bg-background">
@@ -695,7 +790,7 @@ export default function ProjectBoard() {
               
               {/* Phase 2: Board-level Commit and PR buttons */}
               <button
-                onClick={handleCommitAll}
+                onClick={() => handleCommitAll()}
                 disabled={isCommitting || tasks.filter(t => t.status === 'inReview').length === 0 || !hasUncommittedChanges}
                 className="px-4 py-2 rounded-lg border border-border hover:bg-secondary transition-colors inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 title={tasks.filter(t => t.status === 'inReview').length === 0 
@@ -708,19 +803,25 @@ export default function ProjectBoard() {
                 {isCommitting ? 'Committing...' : 'Commit All'}
               </button>
               <button
-                onClick={handleCreatePR}
-                disabled={isCreatingPR || hasUncommittedChanges || prCreated || totalCommitsInSession === 0}
-                className="px-4 py-2 rounded-lg border border-border hover:bg-secondary transition-colors inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                title={prCreated
-                  ? "PR already created for this session"
-                  : hasUncommittedChanges 
-                  ? "Please commit changes first" 
-                  : totalCommitsInSession === 0
-                  ? "No commits to create PR from"
-                  : "Create pull request"}
+                onClick={prButtonState.action}
+                disabled={prButtonState.disabled}
+                className={cn(
+                  "px-4 py-2 rounded-lg border transition-colors inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed",
+                  prButtonState.text === 'Update PR' && "border-yellow-500 hover:bg-yellow-500/10",
+                  prButtonState.text === 'View PR' && "border-green-500 hover:bg-green-500/10",
+                  prButtonState.text === 'Create PR' && "border-border hover:bg-secondary"
+                )}
+                title={prButtonState.tooltip}
               >
-                <GitPullRequest className="h-4 w-4" />
-                {isCreatingPR ? 'Creating...' : 'Create PR'}
+                {prButtonState.text === 'View PR' ? (
+                  <ExternalLink className="h-4 w-4" />
+                ) : (
+                  <GitPullRequest className={cn(
+                    "h-4 w-4",
+                    prButtonState.text === 'Update PR' && "animate-pulse"
+                  )} />
+                )}
+                {isCreatingPR ? 'Processing...' : prButtonState.text}
               </button>
               
               <button 
@@ -886,6 +987,16 @@ export default function ProjectBoard() {
         task={selectedTask}
         columnId={selectedColumnId}
         columns={project.columns}
+      />
+      
+      {/* Commit Modal */}
+      <CommitModal
+        isOpen={isCommitModalOpen}
+        onClose={() => setIsCommitModalOpen(false)}
+        onCommit={handleCommitAll}
+        tasksToCommit={tasks.filter(t => t.status === 'inReview')}
+        projectName={project?.name || ''}
+        isLoading={isCommitting}
       />
     </div>
   );

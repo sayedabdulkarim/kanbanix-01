@@ -88,10 +88,15 @@ export async function POST(request: NextRequest) {
           auth: session.accessToken,
         });
         
+        // Sanitize description - remove control characters
+        const sanitizedDescription = description 
+          ? description.replace(/[\x00-\x1F\x7F]/g, '').trim() 
+          : undefined;
+        
         // Create repository on GitHub
         const { data: repo } = await octokit.repos.createForAuthenticatedUser({
           name: name.replace(/\s+/g, '-').toLowerCase(),
-          description: description || undefined,
+          description: sanitizedDescription,
           private: isPrivate || false,
           auto_init: true,
           gitignore_template: 'Node',

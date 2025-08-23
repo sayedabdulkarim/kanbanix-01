@@ -334,6 +334,7 @@ model SessionState {
   lastCommitMessage       String?   // Last commit message
   lastCommitAt            DateTime? // When the last commit was made
   totalCommitsInSession   Int       @default(0) // Count of commits in this session
+  commitsAfterPR          Int       @default(0) // Count of commits after PR creation
   
   // PR state
   prCreated               Boolean   @default(false)
