@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import workspaceService from '@/lib/services/workspaceService';
 import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
+import toast from 'react-hot-toast';
 import {
   DndContext,
   DragEndEvent,
@@ -135,18 +136,59 @@ export default function ProjectBoard() {
     }
   }, [params.projectId, status, router]);
 
-  // Poll for session state changes every 10 seconds
+  // Poll for session state changes and PR status every 10 seconds
   useEffect(() => {
     if (!project?.id || isEndingSession) return;
 
-    const interval = setInterval(() => {
-      if (!isEndingSession) {
-        fetchSessionState();
+    const checkStatus = async () => {
+      if (isEndingSession) return;
+      
+      // Fetch session state
+      await fetchSessionState();
+      
+      // Check PR status if PR exists
+      if (sessionState?.prCreated && sessionState?.prNumber) {
+        try {
+          const response = await fetch('/api/workspace/check-pr-status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ projectId: project.id })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            
+            if (data.prMerged && data.newSession) {
+              console.log('PR was merged, session has been reset');
+              
+              // Add a small delay to ensure backend has finished updating
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+              // Refresh project data to get updated tasks and session
+              await fetchProject();
+              await fetchSessionState();
+              
+              // Show notification
+              toast.success('PR merged! Session reset with new branch. Ready for new work.');
+            } else if (data.prMerged && data.alreadyProcessed) {
+              // PR was already processed, just refresh session state
+              await fetchSessionState();
+            }
+          }
+        } catch (error) {
+          console.error('Error checking PR status:', error);
+        }
       }
-    }, 10000); // Poll every 10 seconds
+    };
+
+    // Initial check
+    checkStatus();
+    
+    // Set up interval
+    const interval = setInterval(checkStatus, 10000); // Poll every 10 seconds
 
     return () => clearInterval(interval);
-  }, [project?.id, isEndingSession]);
+  }, [project?.id, isEndingSession, sessionState?.prCreated, sessionState?.prNumber]);
 
   const initializeProject = async () => {
     try {
@@ -222,7 +264,7 @@ export default function ProjectBoard() {
       setWorkspaceStatus(status);
     } catch (error) {
       console.error('Error refreshing workspace:', error);
-      alert('Failed to refresh workspace');
+      toast.error('Failed to refresh workspace');
     } finally {
       setWorkspaceLoading(false);
     }
@@ -501,7 +543,7 @@ export default function ProjectBoard() {
       setIsTaskModalOpen(false);
     } catch (error) {
       console.error('Error saving task:', error);
-      alert('Failed to save task. Please try again.');
+      toast.error('Failed to save task. Please try again.');
     }
   };
 
@@ -522,7 +564,7 @@ export default function ProjectBoard() {
         }
       } catch (error) {
         console.error('Error deleting task:', error);
-        alert('Failed to delete task. Please try again.');
+        toast.error('Failed to delete task. Please try again.');
       }
     }
   };
@@ -550,7 +592,7 @@ export default function ProjectBoard() {
       const tasksInReview = tasks.filter(t => t.status === 'inReview');
       
       if (tasksInReview.length === 0) {
-        alert('No tasks in review to commit');
+        toast.error('No tasks in review to commit');
         return;
       }
       
@@ -575,8 +617,8 @@ export default function ProjectBoard() {
         setIsCommitModalOpen(false);
         // Refresh session state to get updated commit info
         await fetchSessionState();
-        // Show success toast instead of alert
-        console.log('All changes committed successfully!');
+        // Show success toast
+        toast.success('All changes committed successfully!');
       } else {
         const error = await response.json();
         throw new Error(error.message || 'Failed to commit changes');
@@ -616,17 +658,17 @@ export default function ProjectBoard() {
           window.open(data.pullRequest.url, '_blank');
         }
         
-        console.log(`Pull request created successfully! PR #${data.pullRequest?.number || ''}`);
+        toast.success(`Pull request created successfully! PR #${data.pullRequest?.number || ''}`);
         
         // Don't auto-move tasks to done - wait for PR merge
         // Tasks stay in review until PR is actually merged
       } else {
         const error = await response.json();
-        alert(`Failed to create PR: ${error.message || 'Unknown error'}`);
+        toast.error(`Failed to create PR: ${error.message || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('PR creation error:', error);
-      alert('Failed to create pull request');
+      toast.error('Failed to create pull request');
     } finally {
       setIsCreatingPR(false);
     }
@@ -656,7 +698,7 @@ export default function ProjectBoard() {
       }
     } catch (error) {
       console.error('Error updating task:', error);
-      alert('Failed to update task. Please try again.');
+      toast.error('Failed to update task. Please try again.');
     }
   };
 
@@ -695,9 +737,11 @@ export default function ProjectBoard() {
       } else {
         const error = await response.json();
         console.error('Failed to end session:', error.message || 'Unknown error');
+        toast.error(`Failed to end session: ${error.message || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('Error ending session:', error);
+      toast.error('Failed to end session. Please try again.');
     }
   };
 
@@ -725,14 +769,14 @@ export default function ProjectBoard() {
         if (prUrl) {
           window.open(prUrl, '_blank');
         }
-        console.log('PR updated with new commits!');
+        toast.success('PR updated with new commits!');
       } else {
         const error = await response.json();
-        alert(`Failed to update PR: ${error.message || 'Unknown error'}`);
+        toast.error(`Failed to update PR: ${error.message || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('Error updating PR:', error);
-      alert('Failed to update pull request');
+      toast.error('Failed to update pull request');
     } finally {
       setIsCreatingPR(false);
     }
@@ -740,6 +784,21 @@ export default function ProjectBoard() {
   
   // Phase 4: Determine PR button state
   const getPRButtonState = () => {
+    // Check if PR was merged (session would be reset)
+    if (sessionState?.prMerged) {
+      // This shouldn't happen as session is reset, but handle it anyway
+      return {
+        text: 'Create PR',
+        action: handleCreatePR,
+        disabled: isCreatingPR || hasUncommittedChanges || totalCommitsInSession === 0,
+        tooltip: hasUncommittedChanges 
+          ? 'Please commit changes first' 
+          : totalCommitsInSession === 0
+          ? 'No commits to create PR from'
+          : 'Create pull request for new work'
+      };
+    }
+    
     if (!sessionState?.prCreated) {
       return {
         text: 'Create PR',

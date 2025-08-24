@@ -52,9 +52,9 @@ export async function POST(request: NextRequest) {
         where: {
           projectId: task.projectId,
           OR: [
-            { name: { contains: 'Done', mode: 'insensitive' } },
-            { name: { contains: 'done', mode: 'insensitive' } },
-            { name: { contains: 'Completed', mode: 'insensitive' } },
+            { name: { contains: 'Done' } },
+            { name: { contains: 'done' } },
+            { name: { contains: 'Completed' } },
           ]
         }
       });
@@ -71,8 +71,8 @@ export async function POST(request: NextRequest) {
         where: {
           projectId: task.projectId,
           OR: [
-            { name: { contains: 'Review', mode: 'insensitive' } },
-            { name: { contains: 'review', mode: 'insensitive' } },
+            { name: { contains: 'Review' } },
+            { name: { contains: 'review' } },
           ]
         }
       });
@@ -89,8 +89,8 @@ export async function POST(request: NextRequest) {
         where: {
           projectId: task.projectId,
           OR: [
-            { name: { contains: 'Progress', mode: 'insensitive' } },
-            { name: { contains: 'progress', mode: 'insensitive' } },
+            { name: { contains: 'Progress' } },
+            { name: { contains: 'progress' } },
           ]
         }
       });

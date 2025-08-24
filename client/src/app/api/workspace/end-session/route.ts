@@ -140,7 +140,7 @@ export async function POST(request: NextRequest) {
           projectId,
           OR: [
             { status: 'todo' },
-            { name: { contains: 'To Do', mode: 'insensitive' } }
+            { name: { contains: 'To Do' } }  // SQLite doesn't support mode: 'insensitive'
           ]
         }
       });

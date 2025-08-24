@@ -8,6 +8,7 @@ import CreateProjectModal from '@/components/projects/CreateProjectModal';
 import RepositorySelector from '@/components/github/RepositorySelector';
 import { cn } from '@/lib/utils/cn';
 import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
+import toast from 'react-hot-toast';
 
 // Landing page component for unauthenticated users
 function LandingPage() {
@@ -200,16 +201,38 @@ function Dashboard() {
         
         // Show success message
         if (projectData.createGithubRepo && result.project?.githubUrl) {
-          console.log(`Project created with GitHub repo: ${result.project.githubUrl}`);
+          toast.success(`Project created with GitHub repo!`);
+        } else {
+          toast.success('Project created successfully!');
         }
       } else {
         const error = await response.json();
         console.error('Error creating project:', error);
-        alert(error.error || 'Failed to create project');
+        
+        // Show user-friendly error message with suggestion
+        let errorMessage = 'Failed to create project';
+        
+        if (error.error?.includes('Repository creation failed')) {
+          // Include the suggestion if available
+          if (error.suggestion) {
+            errorMessage = `Failed to create GitHub repository. ${error.suggestion}`;
+          } else {
+            errorMessage = 'Failed to create GitHub repository. The name might already exist or you may not have permission.';
+          }
+        } else if (error.suggestion) {
+          // If there's a suggestion, append it to the error
+          errorMessage = `${error.error || 'Failed to create project'}. ${error.suggestion}`;
+        } else if (error.error) {
+          errorMessage = error.error;
+        }
+        
+        toast.error(errorMessage, {
+          duration: 8000, // Show longer for detailed error messages
+        });
       }
     } catch (error) {
       console.error('Error creating project:', error);
-      alert('Failed to create project. Please try again.');
+      toast.error('Failed to create project. Please try again.');
     }
   };
 

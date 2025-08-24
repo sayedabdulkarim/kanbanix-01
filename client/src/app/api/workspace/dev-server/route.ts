@@ -88,6 +88,45 @@ async function findAvailablePort(startPort: number = 4001): Promise<number> {
   });
 }
 
+// Helper function to cleanup stale dev server
+async function cleanupStaleDevServer(projectId: string) {
+  if (devServers.has(projectId)) {
+    const server = devServers.get(projectId)!;
+    
+    // Check if the process is actually still running
+    try {
+      // Send signal 0 to check if process exists (doesn't actually kill it)
+      process.kill(server.process.pid!, 0);
+      
+      // Process exists, check if port is still in use
+      const isPortInUse = await new Promise((resolve) => {
+        const tester = net.createServer()
+          .once('error', () => resolve(true))
+          .once('listening', () => {
+            tester.close();
+            resolve(false);
+          })
+          .listen(server.port);
+      });
+      
+      if (!isPortInUse) {
+        // Port is free, process is probably dead
+        console.log(`Removing stale dev server entry for project ${projectId}`);
+        devServers.delete(projectId);
+        return false;
+      }
+      
+      return true; // Server is still running
+    } catch (e) {
+      // Process doesn't exist
+      console.log(`Dev server process for project ${projectId} no longer exists, cleaning up`);
+      devServers.delete(projectId);
+      return false;
+    }
+  }
+  return false;
+}
+
 // POST: Start dev server
 export async function POST(request: NextRequest) {
   try {
@@ -101,16 +140,35 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Project ID required' }, { status: 400 });
     }
 
-    // Check if server already running
+    // Check if server already running and cleanup if stale
     if (devServers.has(projectId)) {
-      const server = devServers.get(projectId)!;
-      return NextResponse.json({
-        success: true,
-        status: server.status,
-        port: server.port,
-        url: server.url,
-        startedAt: server.startedAt
-      });
+      const isStillRunning = await cleanupStaleDevServer(projectId);
+      
+      if (isStillRunning) {
+        const server = devServers.get(projectId)!;
+        
+        // Kill the existing server to force restart with new code
+        console.log(`Killing existing dev server on port ${server.port} to restart with new code`);
+        try {
+          server.process.kill('SIGTERM');
+          // Give it a moment to cleanup
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          // Force kill if still running
+          try {
+            process.kill(server.process.pid!, 0);
+            server.process.kill('SIGKILL');
+          } catch {
+            // Process already dead
+          }
+        } catch (e) {
+          console.error('Error killing dev server:', e);
+        }
+        
+        // Remove from map
+        devServers.delete(projectId);
+        
+        // Continue to start new server below
+      }
     }
 
     // Get workspace path
