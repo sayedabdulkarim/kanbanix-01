@@ -254,8 +254,8 @@ export async function PUT(
         const { AIAgentService, AgentType } = await import('@/lib/services/aiAgentService');
         const aiService = new AIAgentService();
         
-        // Determine agent type based on task content
-        const agentType = determineAgentType(updatedTask.title, updatedTask.description || '');
+        // Determine agent type based on task content (await the async function)
+        const agentType = await determineAgentType(updatedTask.title, updatedTask.description || '');
         console.log('Determined agent type:', agentType);
         
         // Enable AI for this task and execute
@@ -411,34 +411,39 @@ export async function DELETE(
 }
 
 // Helper function to determine agent type based on task content
-function determineAgentType(title: string, description: string): string {
-  const content = (title + ' ' + description).toLowerCase();
-
-  // Bug fixing keywords
-  if (content.match(/\b(fix|bug|error|issue|problem|broken|debug)\b/)) {
-    return 'bug_fixer';
+// Now uses intelligent intent detection with LLM fallback to keywords
+async function determineAgentType(title: string, description: string): Promise<string> {
+  try {
+    // Dynamic import to avoid initialization issues
+    const { intentDetectionService } = await import('@/lib/services/intentDetectionService');
+    
+    // Use the intelligent intent detection service
+    const result = await intentDetectionService.detectIntent(title, description);
+    
+    console.log(`[Agent Type Detection] Method: ${result.method}, Type: ${result.agentType}, Confidence: ${result.confidence}%`);
+    console.log(`[Agent Type Detection] Reasoning: ${result.reasoning}`);
+    
+    return result.agentType;
+  } catch (error) {
+    console.error('[Agent Type Detection] Service failed, using basic fallback:', error);
+    
+    // Ultimate fallback - basic keyword matching
+    const content = (title + ' ' + description).toLowerCase();
+    
+    // Check action verbs first
+    if (content.match(/\b(create|add|implement|build)\b/)) {
+      return 'code_generator';
+    }
+    if (content.match(/\b(fix|debug|repair)\b/)) {
+      return 'bug_fixer';
+    }
+    if (content.match(/\b(test|testing)\b/)) {
+      return 'testing';
+    }
+    if (content.match(/\b(document|docs)\b/)) {
+      return 'documentation';
+    }
+    
+    return 'code_generator'; // Default
   }
-
-  // Testing keywords  
-  if (content.match(/\b(test|testing|spec|unit test|integration test)\b/)) {
-    return 'testing';
-  }
-
-  // Documentation keywords
-  if (content.match(/\b(document|docs|readme|comment|documentation)\b/)) {
-    return 'documentation';
-  }
-
-  // Refactoring keywords
-  if (content.match(/\b(refactor|optimize|clean|improve|restructure)\b/)) {
-    return 'refactoring';
-  }
-
-  // Review keywords
-  if (content.match(/\b(review|audit|check|validate|examine)\b/)) {
-    return 'review';
-  }
-
-  // Default to code generation
-  return 'code_generator';
 }

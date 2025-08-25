@@ -122,7 +122,11 @@ class BuildValidator {
         if (chunk.includes('Failed to compile') || 
             chunk.includes('Module parse failed') ||
             chunk.includes('Type error:') ||
-            chunk.includes('Error:')) {
+            chunk.includes('Error:') ||
+            chunk.includes('tailwindcss') && chunk.includes('PostCSS') ||
+            chunk.includes("It looks like you're trying to use") ||
+            chunk.includes("Package subpath './nesting' is not defined") ||
+            chunk.includes('An error occurred in')) {
           hasErrors = true;
         }
       });
@@ -158,6 +162,119 @@ class BuildValidator {
    */
   async applyQuickFixes(buildOutput, projectPath) {
     const fixes = [];
+    
+    // Fix 0: Tailwind CSS v4 PostCSS compatibility issue
+    if (buildOutput.includes("It looks like you're trying to use `tailwindcss` directly as a PostCSS plugin") ||
+        buildOutput.includes("Package subpath './nesting' is not defined")) {
+      console.log('[Build Validator] Fixing Tailwind CSS PostCSS configuration...');
+      
+      try {
+        // First, detect which version of Tailwind is installed
+        let tailwindVersion = 3; // Default to v3
+        let packageJson = null;
+        
+        try {
+          const packageJsonPath = path.join(projectPath, 'package.json');
+          packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+          
+          // Check actual installed version in node_modules if available
+          try {
+            const tailwindPackagePath = path.join(projectPath, 'node_modules', 'tailwindcss', 'package.json');
+            const tailwindPackage = JSON.parse(await fs.readFile(tailwindPackagePath, 'utf-8'));
+            const installedVersion = tailwindPackage.version;
+            tailwindVersion = parseInt(installedVersion.split('.')[0]);
+            console.log(`[Build Validator] Detected installed Tailwind CSS v${installedVersion}`);
+          } catch (e) {
+            // If can't read from node_modules, check package.json dependency
+            const tailwindDep = packageJson.dependencies?.tailwindcss || packageJson.devDependencies?.tailwindcss;
+            if (tailwindDep) {
+              const versionMatch = tailwindDep.match(/[~^]?(\d+)\./);
+              if (versionMatch) {
+                tailwindVersion = parseInt(versionMatch[1]);
+              }
+              // Special check for v4 alpha/beta versions
+              if (tailwindDep.includes('4.0.0-alpha') || tailwindDep.includes('4.0.0-beta') || tailwindDep.includes('^4.')) {
+                tailwindVersion = 4;
+              }
+            }
+          }
+        } catch (e) {
+          console.log('[Build Validator] Could not determine Tailwind version, defaulting to v3');
+        }
+        
+        const postcssConfigPath = path.join(projectPath, 'postcss.config.js');
+        
+        if (tailwindVersion >= 4) {
+          // Tailwind v4 requires @tailwindcss/postcss
+          console.log('[Build Validator] Applying Tailwind CSS v4 PostCSS configuration...');
+          
+          // Install @tailwindcss/postcss if not present
+          if (packageJson && !packageJson.devDependencies?.['@tailwindcss/postcss']) {
+            console.log('[Build Validator] Installing @tailwindcss/postcss...');
+            const { exec } = require('child_process');
+            const { promisify } = require('util');
+            const execAsync = promisify(exec);
+            
+            try {
+              const installer = packageJson.packageManager?.includes('yarn') ? 'yarn' : 'npm';
+              const installCmd = installer === 'yarn' ? 'add --dev' : 'install --save-dev';
+              await execAsync(`${installer} ${installCmd} @tailwindcss/postcss`, {
+                cwd: projectPath
+              });
+              console.log('[Build Validator] @tailwindcss/postcss installed successfully');
+            } catch (installError) {
+              console.warn('[Build Validator] Failed to install @tailwindcss/postcss:', installError.message);
+            }
+          }
+          
+          // Write v4 PostCSS config
+          const postcssConfig = `/** @type {import('postcss-load-config').Config} */
+module.exports = {
+  plugins: {
+    '@tailwindcss/postcss': {},
+  },
+}`;
+          await fs.writeFile(postcssConfigPath, postcssConfig, 'utf-8');
+          fixes.push('Updated PostCSS config for Tailwind CSS v4 compatibility');
+        } else {
+          // Tailwind v3 configuration
+          console.log('[Build Validator] Applying Tailwind CSS v3 PostCSS configuration...');
+          const postcssConfig = `module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}`;
+          await fs.writeFile(postcssConfigPath, postcssConfig, 'utf-8');
+          fixes.push('Updated PostCSS config for Tailwind CSS v3 compatibility');
+        }
+        
+        // Ensure tailwind.config.js exists
+        const tailwindConfigPath = path.join(projectPath, 'tailwind.config.js');
+        try {
+          await fs.access(tailwindConfigPath);
+        } catch {
+          // Create a basic Tailwind config
+          const tailwindConfig = `/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: [
+    './src/**/*.{js,ts,jsx,tsx,mdx}',
+    './app/**/*.{js,ts,jsx,tsx,mdx}',
+    './pages/**/*.{js,ts,jsx,tsx,mdx}',
+    './components/**/*.{js,ts,jsx,tsx,mdx}',
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}`;
+          await fs.writeFile(tailwindConfigPath, tailwindConfig, 'utf-8');
+          fixes.push(`Created Tailwind CSS configuration`);
+        }
+      } catch (err) {
+        console.error('[Build Validator] Error fixing Tailwind config:', err);
+      }
+    }
     
     // Fix 1: Missing 'use client' directive
     if (buildOutput.includes("You're importing a component that needs") ||

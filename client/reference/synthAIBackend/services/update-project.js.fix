@@ -1,0 +1,387 @@
+const express = require("express");
+const fs = require("fs/promises");
+const path = require("path");
+const axios = require("axios");
+require("dotenv").config();
+
+const router = express.Router();
+
+// File path for persisting project history
+const historyFilePath = path.join(__dirname, "../data/project-history.json");
+
+// Project history storage - keeps track of changes for each project
+let projectHistory = {};
+console.log({ projectHistory }, " ====projectHistory");
+// Ensure data directory exists and load history
+(async () => {
+  try {
+    const dataDir = path.join(__dirname, "../data");
+    await fs.mkdir(dataDir, { recursive: true });
+
+    try {
+      const historyData = await fs.readFile(historyFilePath, "utf-8");
+      projectHistory = JSON.parse(historyData);
+      console.log("Project history loaded from file");
+    } catch (err) {
+      // File doesn't exist or is invalid, start with empty history
+      projectHistory = {};
+      await fs.writeFile(
+        historyFilePath,
+        JSON.stringify(projectHistory),
+        "utf-8"
+      );
+      console.log("Created new project history file");
+    }
+  } catch (err) {
+    console.error("Error initializing project history:", err);
+  }
+})();
+
+// Helper function to save project history to disk
+async function saveProjectHistory() {
+  try {
+    await fs.writeFile(
+      historyFilePath,
+      JSON.stringify(projectHistory),
+      "utf-8"
+    );
+  } catch (err) {
+    console.error("Error saving project history:", err);
+  }
+}
+
+// Helper function to recursively get project structure
+async function getProjectStructure(dirPath, basePath = "") {
+  const items = await fs.readdir(dirPath, { withFileTypes: true });
+  const files = [];
+
+  for (const item of items) {
+    const relativePath = path.join(basePath, item.name);
+
+    // Skip node_modules and .git directories
+    if (item.name === "node_modules" || item.name === ".git") {
+      continue;
+    }
+
+    if (item.isDirectory()) {
+      const subDirFiles = await getProjectStructure(
+        path.join(dirPath, item.name),
+        relativePath
+      );
+      files.push(...subDirFiles);
+    } else {
+      files.push(relativePath);
+    }
+  }
+
+  return files;
+}
+
+// Helper function to get content of key project files
+async function getKeyFilesContent(projectPath, fileList) {
+  const fileContents = {};
+  const keyExtensions = [".ts", ".tsx", ".js", ".jsx", ".css"];
+  const maxFilesToInclude = 10; // Limit to avoid making prompt too large
+  let filesIncluded = 0;
+
+  for (const filePath of fileList) {
+    // Only include important code files
+    const ext = path.extname(filePath);
+    if (keyExtensions.includes(ext) && filesIncluded < maxFilesToInclude) {
+      try {
+        const content = await fs.readFile(
+          path.join(projectPath, filePath),
+          "utf-8"
+        );
+        fileContents[filePath] = content;
+        filesIncluded++;
+      } catch (err) {
+        console.error(`Error reading file ${filePath}:`, err);
+      }
+    }
+  }
+
+  return fileContents;
+}
+
+// POST /update-project
+router.post("/update-project", async (req, res) => {
+  const { projectName, requirements } = req.body;
+
+  if (!projectName || !requirements) {
+    return res
+      .status(400)
+      .json({ error: "projectName and requirements are required" });
+  }
+
+  const baseDir = path.join(__dirname, "../../client/user-projects");
+  const projectPath = path.join(baseDir, projectName);
+  const prdPath = path.join(projectPath, "PRD.md");
+
+  try {
+    const prd = await fs.readFile(prdPath, "utf-8");
+
+    // Get the current project structure to provide context to the LLM
+    const projectFiles = await getProjectStructure(projectPath);
+
+    // Get contents of key files
+    const keyFilesContent = await getKeyFilesContent(projectPath, projectFiles);
+
+    // Add this block:
+    const isInitial = prd.trim() === requirements.trim();
+
+    // Initialize project history if it doesn't exist
+    if (!projectHistory[projectName]) {
+      projectHistory[projectName] = {
+        originalPRD: prd,
+        updates: [],
+      };
+    }
+
+    // Add the current update to history
+    if (!isInitial) {
+      projectHistory[projectName].updates.push({
+        timestamp: new Date().toISOString(),
+        requirements: requirements,
+      });
+
+      // Save the updated history
+      await saveProjectHistory();
+    }
+
+    const prompt = isInitial
+      ? `
+You are an expert Next.js developer. Generate the FULL codebase for the following PRD using Next.js (with app directory) and Tailwind CSS.
+
+IMPORTANT: Your response MUST be a valid JSON object with NO text before or after it. Do NOT include any explanation, markdown formatting (such as \`\`\`json), comments, or extra text outside of the JSON object itself.
+
+The JSON structure must be EXACTLY as follows:
+{
+  "files": [
+    {
+      "path": "relative/path/to/file",
+      "content": "full code here",
+      "action": "create"
+    }
+  ],
+  "explanation": "brief explanation of the generated code"
+}
+
+PRD:
+${prd}
+`
+      : `
+You are an expert Next.js developer. Your task is to analyze the project requirements and generate code updates.
+
+IMPORTANT: Your response MUST be a valid JSON object with NO text before or after it. Do NOT include any explanation, markdown formatting (such as \`\`\`json), comments, or extra text outside of the JSON object itself.
+
+You will be provided with:
+1. The original PRD
+2. Current project structure
+3. Key project files content
+4. New requirements
+
+Generate code updates that:
+- Fix any issues mentioned in the requirements
+- Maintain consistency with the existing codebase
+- Follow Next.js best practices
+- Use Tailwind CSS for styling
+
+The JSON structure must be EXACTLY as follows:
+{
+  "files": [
+    {
+      "path": "relative/path/to/file",
+      "content": "full code here", 
+      "action": "create|update|delete"
+    }
+  ],
+  "explanation": "brief explanation of changes"
+}
+
+Original PRD:
+${prd}
+
+Current Project Structure:
+${JSON.stringify(projectFiles, null, 2)}
+
+Project Files Content:
+${JSON.stringify(keyFilesContent, null, 2)}
+
+Update History:
+${JSON.stringify(projectHistory[projectName]?.updates || [], null, 2)}
+
+New Requirements/Error Message:
+${requirements}
+`;
+
+    // Check if API key exists before making the request
+    if (!process.env.OPENROUTER_API_KEY) {
+      return res.status(500).json({ 
+        error: "OpenRouter API key is missing. Please check your environment variables." 
+      });
+    }
+    
+    try {
+      const response = await axios.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          model: "anthropic/claude-3.5-sonnet",
+          messages: [
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+          max_tokens: 4000,
+          temperature: 0.7,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 60000,
+        }
+      );
+
+      const completion = response.data.choices?.[0]?.message?.content;
+      if (!completion) {
+        return res.status(500).json({ error: "Empty response from LLM" });
+      }
+
+      let parsed;
+      try {
+        // Enhanced JSON extraction with multiple fallbacks
+        // Step 1: Try to parse the raw completion first
+        try {
+          parsed = JSON.parse(completion);
+        } catch (initialError) {
+          // Step 2: If that fails, try to extract JSON from markdown code blocks
+          const jsonMatch = completion.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (jsonMatch && jsonMatch[1]) {
+            try {
+              parsed = JSON.parse(jsonMatch[1].trim());
+            } catch (markdownError) {
+              // Step 3: Try with a more aggressive approach - find the first { and last }
+              const potentialJson = completion.substring(
+                completion.indexOf("{"),
+                completion.lastIndexOf("}") + 1
+              );
+              parsed = JSON.parse(potentialJson);
+            }
+          } else {
+            // If no markdown blocks, try with the aggressive approach directly
+            const potentialJson = completion.substring(
+              completion.indexOf("{"),
+              completion.lastIndexOf("}") + 1
+            );
+            parsed = JSON.parse(potentialJson);
+          }
+        }
+
+        // Verify the parsed object has the expected structure
+        if (!parsed || !Array.isArray(parsed.files)) {
+          throw new Error("Response lacks required 'files' array");
+        }
+      } catch (err) {
+        console.error("LLM did not return valid JSON:", completion);
+        return res.status(500).json({
+          error:
+            "LLM did not return valid JSON. Please try again or adjust your prompt.",
+          details: completion,
+        });
+      }
+
+      const changes = [];
+
+      for (const file of parsed.files) {
+        const filePath = path.join(projectPath, file.path);
+
+        switch (file.action) {
+          case "create":
+          case "update":
+            try {
+              await fs.mkdir(path.dirname(filePath), { recursive: true });
+              await fs.writeFile(filePath, file.content, "utf-8");
+              changes.push(`Updated ${file.path}`);
+            } catch (error) {
+              console.error(`Error creating/updating file ${file.path}:`, error);
+              return res.status(500).json({
+                error: `Error processing file ${file.path}: ${error.message}`
+              });
+            }
+            break;
+          case "delete":
+            try {
+              await fs.unlink(filePath);
+              changes.push(`Deleted ${file.path}`);
+            } catch (error) {
+              console.error(`Error deleting file ${file.path}:`, error);
+              // Continue with other files even if one delete fails
+            }
+            break;
+          default:
+            console.warn(`Unknown action ${file.action} for file ${file.path}`);
+        }
+      }
+
+      return res.json({
+        message: "Project updated successfully",
+        changes,
+        explanation: parsed.explanation || "",
+      });
+    } catch (apiErr) {
+      console.error("API request error:", apiErr);
+      return res.status(500).json({ 
+        error: "Failed to connect to OpenRouter API", 
+        details: apiErr.message 
+      });
+    }
+  } catch (err) {
+    console.error(err);
+    return res
+      .status(500)
+      .json({ error: "Failed to update project", details: err.message });
+  }
+});
+
+// GET /project-history/:projectName - Get history for a specific project
+router.get("/project-history/:projectName", (req, res) => {
+  const { projectName } = req.params;
+
+  if (!projectName) {
+    return res.status(400).json({ error: "Project name is required" });
+  }
+
+  const history = projectHistory[projectName] || { updates: [] };
+  return res.json(history);
+});
+
+// DELETE /clear-project-history/:projectName - Clear history for a specific project
+router.delete("/clear-project-history/:projectName", async (req, res) => {
+  const { projectName } = req.params;
+
+  if (!projectName) {
+    return res.status(400).json({ error: "Project name is required" });
+  }
+
+  if (projectHistory[projectName]) {
+    // Keep the original PRD but clear updates
+    projectHistory[projectName].updates = [];
+
+    // Save the updated history
+    await saveProjectHistory();
+
+    return res.json({ message: `History cleared for project ${projectName}` });
+  }
+
+  return res.status(404).json({ error: "Project history not found" });
+});
+
+// GET /all-project-histories - Get histories for all projects
+router.get("/all-project-histories", (req, res) => {
+  return res.json(projectHistory);
+});
+
+module.exports = router;

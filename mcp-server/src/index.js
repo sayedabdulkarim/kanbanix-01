@@ -1,4 +1,16 @@
 #!/usr/bin/env node
+
+// Load environment variables FIRST, before anything else
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load .env file from the mcp-server directory
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -6,7 +18,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
-// Import configuration and services
+// Import configuration and services (AFTER loading env vars)
 import { mcpConfig, isDesktopMode, isApiMode } from './config.js';
 import { claudeService } from './claude-service.js';
 

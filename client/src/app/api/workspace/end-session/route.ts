@@ -105,7 +105,7 @@ export async function POST(request: NextRequest) {
       console.log('No client project folder to clean or already deleted');
     }
 
-    // 3. Update SessionState to mark as inactive
+    // 3. Delete active SessionState (instead of marking inactive to avoid unique constraint issues)
     const sessionState = await prisma.sessionState.findFirst({
       where: {
         projectId,
@@ -115,14 +115,12 @@ export async function POST(request: NextRequest) {
     });
 
     if (sessionState) {
-      await prisma.sessionState.update({
-        where: { id: sessionState.id },
-        data: {
-          isActive: false,
-          updatedAt: new Date()
-        }
+      // Delete the session state entirely to avoid unique constraint violations
+      // The session will be recreated fresh when a new session starts
+      await prisma.sessionState.delete({
+        where: { id: sessionState.id }
       });
-      console.log('Session state marked as inactive');
+      console.log('Session state deleted successfully');
     }
 
     // 4. Reset any tasks that were in progress back to TODO
@@ -181,7 +179,7 @@ export async function POST(request: NextRequest) {
       message: 'Session ended successfully',
       workspaceDeleted: true,
       tasksReset: tasksInProgress.length,
-      sessionState: sessionState ? 'deactivated' : 'no active session'
+      sessionState: sessionState ? 'deleted' : 'no active session'
     });
 
   } catch (error: any) {

@@ -226,7 +226,7 @@ export class AIAgentService {
         })
       });
 
-      // Phase 2: Auto-move task to "In Review" column after successful AI completion
+      // Phase 2: Move task based on build validation result
       const execution = await this.prisma.agentExecution.findUnique({
         where: { id: executionId },
         include: { 
@@ -243,27 +243,57 @@ export class AIAgentService {
       });
 
       if (execution && execution.task) {
-        // Find the "In Review" column for this project by status
-        const inReviewColumn = execution.task.project.columns.find(
-          col => col.status === 'inReview' || col.name.toLowerCase().includes('review')
-        );
+        // Check if build validation passed (from result)
+        const buildPassed = result.buildPassed !== false; // Default to true if not specified
         
-        if (inReviewColumn) {
-          // Update task to move to "In Review" column
-          await this.prisma.task.update({
-            where: { id: execution.task.id },
-            data: {
-              status: 'inReview',
-              columnId: inReviewColumn.id,
-              updatedAt: new Date()
-            }
-          });
-          
-          await this.addExecutionLog(
-            executionId, 
-            'info', 
-            'Task moved to In Review column for user review'
+        if (buildPassed) {
+          // Build passed - move to "In Review"
+          const inReviewColumn = execution.task.project.columns.find(
+            col => col.status === 'inReview' || col.name.toLowerCase().includes('review')
           );
+          
+          if (inReviewColumn) {
+            await this.prisma.task.update({
+              where: { id: execution.task.id },
+              data: {
+                status: 'inReview',
+                columnId: inReviewColumn.id,
+                updatedAt: new Date()
+              }
+            });
+            
+            await this.addExecutionLog(
+              executionId, 
+              'info', 
+              '✅ Task moved to In Review column (build validation passed)'
+            );
+          }
+        } else {
+          // Build failed - mark as blocked or keep in progress
+          const blockedColumn = execution.task.project.columns.find(
+            col => col.status === 'blocked' || col.name.toLowerCase().includes('blocked')
+          );
+          
+          const targetColumn = blockedColumn || execution.task.project.columns.find(
+            col => col.status === 'todo'
+          );
+          
+          if (targetColumn) {
+            await this.prisma.task.update({
+              where: { id: execution.task.id },
+              data: {
+                status: blockedColumn ? 'blocked' : 'todo',
+                columnId: targetColumn.id,
+                updatedAt: new Date()
+              }
+            });
+            
+            await this.addExecutionLog(
+              executionId, 
+              'error', 
+              `❌ Task marked as ${blockedColumn ? 'blocked' : 'todo'} - build validation failed. Manual intervention required.`
+            );
+          }
         }
       }
 
@@ -331,17 +361,47 @@ export class AIAgentService {
     const changes = mcpResult.changes || [];
     console.log('MCP Result changes:', changes.length, 'files');
     
+    // Check if MCP server already ran build validation
+    const mcpBuildValidation = mcpResult.buildValidation;
+    console.log('MCP Build Validation Result:', mcpBuildValidation);
+    
     // Run build validation and start dev server if this is a new project or major update
     let devServerUrl = null;
+    let buildValidationPassed = false;
+    
     if (changes.length > 0) {
       try {
-        // Run build validation
-        await this.updateProgress(executionId, 85, 'Running build validation...');
-        const buildResult = await this.runBuildValidation(execution.task.projectId, executionId);
-        
-        if (buildResult.success) {
-          await this.addExecutionLog(executionId, 'info', '✅ Build validation passed');
+        // Check if MCP already validated the build
+        if (mcpBuildValidation) {
+          await this.updateProgress(executionId, 85, 'Processing build validation results...');
           
+          if (mcpBuildValidation.success) {
+            await this.addExecutionLog(executionId, 'info', `✅ Build validation passed${mcpBuildValidation.skipped ? ' (skipped - simple change)' : ''}`);
+            buildValidationPassed = true;
+          } else {
+            await this.addExecutionLog(executionId, 'error', `❌ Build validation failed after ${mcpBuildValidation.attempts || 1} attempts`);
+            buildValidationPassed = false;
+            
+            // Log the specific errors if available
+            if (mcpBuildValidation.message) {
+              await this.addExecutionLog(executionId, 'error', `Build errors: ${mcpBuildValidation.message}`);
+            }
+          }
+        } else {
+          // Fallback: MCP didn't run validation, so we'll do a simple check
+          await this.updateProgress(executionId, 85, 'Running build validation...');
+          const buildResult = await this.runBuildValidation(execution.task.projectId, executionId);
+          buildValidationPassed = buildResult.success;
+          
+          if (buildValidationPassed) {
+            await this.addExecutionLog(executionId, 'info', '✅ Build validation passed');
+          } else {
+            await this.addExecutionLog(executionId, 'warning', `⚠️ Build validation failed with ${buildResult.errors?.length || 0} errors`);
+          }
+        }
+        
+        // Only start dev server if build passed (or if we want to try anyway in dev mode)
+        if (buildValidationPassed || process.env.NODE_ENV === 'development') {
           // Start dev server
           await this.updateProgress(executionId, 90, 'Starting development server...');
           const serverResult = await this.startDevServer(execution.task.projectId, executionId);
@@ -351,7 +411,7 @@ export class AIAgentService {
             devServerUrl = 'pending'; // Signal to frontend to start the server
           }
         } else {
-          await this.addExecutionLog(executionId, 'warning', `⚠️ Build validation failed with ${buildResult.errors?.length || 0} errors`);
+          await this.addExecutionLog(executionId, 'warning', `⚠️ Skipping dev server start due to build errors`);
           // Still try to start dev server as it might work in dev mode
           const serverResult = await this.startDevServer(execution.task.projectId, executionId);
           if (serverResult.success) {
@@ -408,7 +468,9 @@ export class AIAgentService {
     return {
       summary: mcpResult.summary || `Code generated successfully for task: ${input.title}`,
       changes: changes,
-      devServerUrl
+      devServerUrl,
+      buildValidation: mcpBuildValidation || { success: buildValidationPassed },
+      buildPassed: buildValidationPassed
     };
   }
 

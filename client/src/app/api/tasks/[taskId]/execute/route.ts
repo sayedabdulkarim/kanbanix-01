@@ -42,22 +42,22 @@ export async function POST(
       }, { status: 404 });
     }
 
+    // Determine agent type if not provided
+    const finalAgentType = agentType || await determineAgentType(task.title, task.description || '');
+
     // Update task to enable AI if not already enabled
     if (!task.agentEnabled) {
       await prisma.task.update({
         where: { id: taskId },
         data: {
           agentEnabled: true,
-          agentType: agentType || determineAgentType(task.title, task.description || '')
+          agentType: finalAgentType
         }
       });
     }
 
     // Initialize AI Agent Service
     const aiService = new AIAgentService();
-    
-    // Determine agent type if not provided
-    const finalAgentType = agentType || determineAgentType(task.title, task.description || '');
 
     // Execute the task with AI agent
     const execution = await aiService.executeTask(
@@ -241,34 +241,54 @@ export async function DELETE(
 }
 
 // Helper function to determine agent type based on task content
-function determineAgentType(title: string, description: string): AgentType {
-  const content = (title + ' ' + description).toLowerCase();
-
-  // Bug fixing keywords
-  if (content.match(/\b(fix|bug|error|issue|problem|broken|debug)\b/)) {
-    return AgentType.BUG_FIXER;
+// Now uses intelligent intent detection with LLM fallback to keywords
+async function determineAgentType(title: string, description: string): Promise<AgentType> {
+  try {
+    // Dynamic import to avoid initialization issues
+    const { intentDetectionService } = await import('@/lib/services/intentDetectionService');
+    
+    // Use the intelligent intent detection service
+    const result = await intentDetectionService.detectIntent(title, description);
+    
+    console.log(`[Agent Type Detection] Method: ${result.method}, Type: ${result.agentType}, Confidence: ${result.confidence}%`);
+    console.log(`[Agent Type Detection] Reasoning: ${result.reasoning}`);
+    
+    // Map string agent type to enum
+    switch (result.agentType) {
+      case 'bug_fixer':
+        return AgentType.BUG_FIXER;
+      case 'testing':
+        return AgentType.TESTING;
+      case 'documentation':
+        return AgentType.DOCUMENTATION;
+      case 'refactoring':
+        return AgentType.REFACTORING;
+      case 'review':
+        return AgentType.REVIEW;
+      case 'code_generator':
+      default:
+        return AgentType.CODE_GENERATOR;
+    }
+  } catch (error) {
+    console.error('[Agent Type Detection] Service failed, using basic fallback:', error);
+    
+    // Ultimate fallback - basic keyword matching
+    const content = (title + ' ' + description).toLowerCase();
+    
+    // Check action verbs first
+    if (content.match(/\b(create|add|implement|build)\b/)) {
+      return AgentType.CODE_GENERATOR;
+    }
+    if (content.match(/\b(fix|debug|repair)\b/)) {
+      return AgentType.BUG_FIXER;
+    }
+    if (content.match(/\b(test|testing)\b/)) {
+      return AgentType.TESTING;
+    }
+    if (content.match(/\b(document|docs)\b/)) {
+      return AgentType.DOCUMENTATION;
+    }
+    
+    return AgentType.CODE_GENERATOR; // Default
   }
-
-  // Testing keywords  
-  if (content.match(/\b(test|testing|spec|unit test|integration test)\b/)) {
-    return AgentType.TESTING;
-  }
-
-  // Documentation keywords
-  if (content.match(/\b(document|docs|readme|comment|documentation)\b/)) {
-    return AgentType.DOCUMENTATION;
-  }
-
-  // Refactoring keywords
-  if (content.match(/\b(refactor|optimize|clean|improve|restructure)\b/)) {
-    return AgentType.REFACTORING;
-  }
-
-  // Review keywords
-  if (content.match(/\b(review|audit|check|validate|examine)\b/)) {
-    return AgentType.REVIEW;
-  }
-
-  // Default to code generation
-  return AgentType.CODE_GENERATOR;
 }

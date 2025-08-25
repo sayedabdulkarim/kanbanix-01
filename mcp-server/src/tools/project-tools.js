@@ -4,12 +4,10 @@ import { spawn, exec as execCallback } from 'child_process';
 import { promisify } from 'util';
 import { getBoilerplateFiles, detectFramework } from '../templates/boilerplate-templates.js';
 import Anthropic from '@anthropic-ai/sdk';
-import dotenv from 'dotenv';
 import BuildValidator from '../utils/build-validator.js';
 import TailwindVersionDetector from '../utils/tailwind-version-detector.js';
 
-// Load environment variables
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+// Environment variables are now loaded in index.js before this file is imported
 
 const exec = promisify(execCallback);
 const PROJECT_ROOT = process.env.WORKSPACE_PATH || path.resolve(process.cwd(), '..');
@@ -470,16 +468,53 @@ export const projectTools = [
           // Check if project uses Tailwind (has it in package.json)
           const hasTailwindPackage = packageJson?.dependencies?.tailwindcss || packageJson?.devDependencies?.tailwindcss;
           
+          // Detect Tailwind version
+          let tailwindVersion = null;
+          if (hasTailwindPackage) {
+            const tailwindDep = packageJson?.dependencies?.tailwindcss || packageJson?.devDependencies?.tailwindcss;
+            if (tailwindDep) {
+              // Check for v4 indicators
+              if (tailwindDep.includes('^4.') || tailwindDep.includes('~4.') || tailwindDep.includes('4.')) {
+                tailwindVersion = 4;
+                console.log('Detected Tailwind CSS v4 in package.json');
+              } else {
+                tailwindVersion = 3;
+                console.log('Detected Tailwind CSS v3 in package.json');
+              }
+            }
+          }
+          
           // Only check for configs if project actually uses Tailwind
           let hasTailwindConfig = false;
           let hasPostCSSConfig = false;
           
           if (hasTailwindPackage) {
-            hasTailwindConfig = await fs.access(path.join(workspacePath, 'tailwind.config.js')).then(() => true).catch(() => false);
-            hasPostCSSConfig = await fs.access(path.join(workspacePath, 'postcss.config.js')).then(() => true).catch(() => false);
+            // Check for Tailwind config with multiple possible extensions
+            const tailwindConfigFiles = ['tailwind.config.js', 'tailwind.config.mjs', 'tailwind.config.ts'];
+            for (const configFile of tailwindConfigFiles) {
+              if (await fs.access(path.join(workspacePath, configFile)).then(() => true).catch(() => false)) {
+                hasTailwindConfig = true;
+                console.log(`Found existing Tailwind config: ${configFile}`);
+                break;
+              }
+            }
+            
+            // Check for PostCSS config with multiple possible extensions
+            const postcssConfigFiles = ['postcss.config.js', 'postcss.config.mjs', 'postcss.config.ts', 'postcss.config.json'];
+            for (const configFile of postcssConfigFiles) {
+              if (await fs.access(path.join(workspacePath, configFile)).then(() => true).catch(() => false)) {
+                hasPostCSSConfig = true;
+                console.log(`Found existing PostCSS config: ${configFile}`);
+                break;
+              }
+            }
             
             if (!hasTailwindConfig || !hasPostCSSConfig) {
-              console.log('Project uses Tailwind but configuration files are missing, will add them...');
+              console.log('Project uses Tailwind but some configuration files are missing:');
+              if (!hasTailwindConfig) console.log('  - Missing Tailwind config');
+              if (!hasPostCSSConfig) console.log('  - Missing PostCSS config');
+            } else {
+              console.log('Project has both Tailwind and PostCSS configs, skipping config generation');
             }
           } else {
             console.log('Project does not use Tailwind, will use existing CSS framework');
@@ -851,60 +886,85 @@ Requirements:
             console.log(`${fileExists ? 'Updated' : 'Created'}: ${filePath} (${newLineCount} lines)`);
           }
           
-          // Only setup Tailwind configuration if project already uses Tailwind
+          // Only setup Tailwind configuration if project uses Tailwind AND configs are missing
           if (hasTailwindPackage) {
-            // Use TailwindVersionDetector to handle v3 vs v4 differences
-            const tailwindDetector = new TailwindVersionDetector();
-            
-            // Detect version and create appropriate PostCSS config
-            const tailwindInfo = await tailwindDetector.detectAndConfigurePostCSS(workspacePath);
-            console.log(`Detected Tailwind v${tailwindInfo.version}`);
-            
-            if (tailwindInfo.configCreated) {
-              createdFiles.push({
-                path: '/postcss.config.js',
-                type: 'created',
-                diff: { added: 6, removed: 0, hunks: [] }
-              });
-            }
-            
-            // Install required packages based on Tailwind version
-            const missingDeps = [];
-            for (const pkg of tailwindInfo.requiredPackages) {
-              const hasPkg = packageJson?.dependencies?.[pkg] || packageJson?.devDependencies?.[pkg];
-              if (!hasPkg) {
-                missingDeps.push(pkg);
-                console.log(`${pkg} package missing, will install...`);
-              }
-            }
-            
-            // Install missing dependencies if needed
-            if (missingDeps.length > 0) {
-              console.log(`Installing missing Tailwind peer dependencies: ${missingDeps.join(', ')}`);
-              const installer = packageJson?.packageManager?.includes('yarn') ? 'yarn' : 'npm';
-              const installCmd = installer === 'yarn' ? 'add --dev' : 'install --save-dev';
+            if (!hasTailwindConfig || !hasPostCSSConfig) {
+              // Use TailwindVersionDetector to handle v3 vs v4 differences
+              const tailwindDetector = new TailwindVersionDetector();
               
-              try {
-                await exec(`${installer} ${installCmd} ${missingDeps.join(' ')}`, {
-                  cwd: workspacePath
+              // Detect version and create appropriate PostCSS config
+              // Only force recreate if PostCSS config is missing (not if Tailwind config is missing)
+              const tailwindInfo = await tailwindDetector.detectAndConfigurePostCSS(workspacePath, !hasPostCSSConfig);
+              console.log(`Detected Tailwind v${tailwindInfo.version}`);
+              
+              if (tailwindInfo.configCreated) {
+                createdFiles.push({
+                  path: '/postcss.config.js',
+                  type: 'created',
+                  diff: { added: 6, removed: 0, hunks: [] }
                 });
-                console.log('Tailwind peer dependencies installed successfully');
-              } catch (installError) {
-                console.warn('Failed to install Tailwind peer dependencies:', installError.message);
-                console.warn('You may need to manually install:', missingDeps.join(', '));
               }
-            }
-            
-            // Create tailwind.config.js if missing
-            if (!hasTailwindConfig) {
-              console.log('Creating tailwind.config.js...');
-              const tailwindConfig = tailwindDetector.getTailwindConfig(tailwindInfo.version);
-              await fs.writeFile(path.join(workspacePath, 'tailwind.config.js'), tailwindConfig, 'utf-8');
-              createdFiles.push({
-                path: '/tailwind.config.js',
-                type: 'created',
-                diff: { added: tailwindConfig.split('\n').length, removed: 0, hunks: [] }
-              });
+              
+              // Install required packages based on Tailwind version
+              const missingDeps = [];
+              for (const pkg of tailwindInfo.requiredPackages) {
+                const hasPkg = packageJson?.dependencies?.[pkg] || packageJson?.devDependencies?.[pkg];
+                if (!hasPkg) {
+                  missingDeps.push(pkg);
+                  console.log(`${pkg} package missing, will install...`);
+                }
+              }
+              
+              // For Tailwind v4, we need @tailwindcss/postcss instead of postcss/autoprefixer
+              if (tailwindInfo.version >= 4 && !packageJson?.devDependencies?.['@tailwindcss/postcss']) {
+                // Remove postcss and autoprefixer from the list if they're there
+                const v4Deps = missingDeps.filter(pkg => pkg !== 'postcss' && pkg !== 'autoprefixer');
+                if (!v4Deps.includes('@tailwindcss/postcss')) {
+                  v4Deps.push('@tailwindcss/postcss');
+                }
+                missingDeps.length = 0;
+                missingDeps.push(...v4Deps);
+              }
+              
+              // Install missing dependencies if needed
+              if (missingDeps.length > 0) {
+                console.log(`Installing missing Tailwind dependencies: ${missingDeps.join(', ')}`);
+                const installer = packageJson?.packageManager?.includes('yarn') ? 'yarn' : 'npm';
+                const installCmd = installer === 'yarn' ? 'add --dev' : 'install --save-dev';
+                
+                try {
+                  await exec(`${installer} ${installCmd} ${missingDeps.join(' ')}`, {
+                    cwd: workspacePath
+                  });
+                  console.log('Tailwind dependencies installed successfully');
+                } catch (installError) {
+                  console.warn('Failed to install Tailwind dependencies:', installError.message);
+                  console.warn('You may need to manually install:', missingDeps.join(', '));
+                }
+              }
+              
+              // Create tailwind.config.js if missing
+              if (!hasTailwindConfig) {
+                console.log('Creating tailwind.config.js...');
+                // Determine Tailwind version for the config
+                let configVersion = 3;
+                try {
+                  const installedTailwindPath = path.join(workspacePath, 'node_modules', 'tailwindcss', 'package.json');
+                  const installedPackage = JSON.parse(await fs.readFile(installedTailwindPath, 'utf-8'));
+                  configVersion = parseInt(installedPackage.version.split('.')[0]);
+                } catch (e) {
+                  // Default to v3 if can't detect
+                }
+                const tailwindConfig = tailwindDetector.getTailwindConfig(configVersion);
+                await fs.writeFile(path.join(workspacePath, 'tailwind.config.js'), tailwindConfig, 'utf-8');
+                createdFiles.push({
+                  path: '/tailwind.config.js',
+                  type: 'created',
+                  diff: { added: tailwindConfig.split('\n').length, removed: 0, hunks: [] }
+                });
+              }
+            } else {
+              console.log('Both Tailwind and PostCSS configs exist, skipping Tailwind setup entirely');
             }
             
             // Check if globals.css has Tailwind directives

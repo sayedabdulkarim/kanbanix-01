@@ -6,19 +6,21 @@ class TailwindVersionDetector {
    * Detect Tailwind version and configure PostCSS appropriately
    * Based on SynthAI's implementation
    */
-  async detectAndConfigurePostCSS(projectPath) {
+  async detectAndConfigurePostCSS(projectPath, forceRecreate = false) {
     try {
       console.log('Detecting Tailwind CSS version...');
       
-      // Clean up any existing PostCSS config files to avoid conflicts
-      const configFiles = ['postcss.config.js', 'postcss.config.mjs', 'postcss.config.ts'];
-      for (const file of configFiles) {
-        const filePath = path.join(projectPath, file);
-        try {
-          await fs.unlink(filePath);
-          console.log(`Removed existing ${file}`);
-        } catch (err) {
-          // File doesn't exist, which is fine
+      // Only clean up existing configs if we're forcing recreation
+      if (forceRecreate) {
+        const configFiles = ['postcss.config.js', 'postcss.config.mjs', 'postcss.config.ts'];
+        for (const file of configFiles) {
+          const filePath = path.join(projectPath, file);
+          try {
+            await fs.unlink(filePath);
+            console.log(`Removed existing ${file}`);
+          } catch (err) {
+            // File doesn't exist, which is fine
+          }
         }
       }
       
