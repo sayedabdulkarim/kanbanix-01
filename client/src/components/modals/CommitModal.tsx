@@ -23,10 +23,11 @@ export default function CommitModal({
 }: CommitModalProps) {
   const [commitMessage, setCommitMessage] = useState('');
   const [error, setError] = useState('');
+  const [hasUserEdited, setHasUserEdited] = useState(false);
   
-  // Generate default commit message
+  // Generate default commit message only when modal opens or tasks change without user edits
   useEffect(() => {
-    if (tasksToCommit.length > 0) {
+    if (isOpen && tasksToCommit.length > 0 && !hasUserEdited) {
       const taskTitles = tasksToCommit.map(t => `- ${t.title}`).join('\n');
       const defaultMessage = tasksToCommit.length === 1
         ? `feat: ${tasksToCommit[0].title}`
@@ -34,7 +35,15 @@ export default function CommitModal({
       console.log('Setting default message:', defaultMessage);
       setCommitMessage(defaultMessage);
     }
-  }, [tasksToCommit]);
+  }, [isOpen, tasksToCommit, hasUserEdited]);
+  
+  // Reset edit flag when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      setHasUserEdited(false);
+      setError('');
+    }
+  }, [isOpen]);
 
   // Debug state
   useEffect(() => {
@@ -120,7 +129,10 @@ export default function CommitModal({
               <textarea
                 id="commit-message"
                 value={commitMessage}
-                onChange={(e) => setCommitMessage(e.target.value)}
+                onChange={(e) => {
+                  setCommitMessage(e.target.value);
+                  setHasUserEdited(true);
+                }}
                 className="w-full h-32 px-3 py-2 bg-background border border-border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-primary/50"
                 placeholder="Enter commit message..."
                 disabled={isLoading}
