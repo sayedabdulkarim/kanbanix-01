@@ -468,18 +468,27 @@ export const projectTools = [
           // Check if project uses Tailwind (has it in package.json)
           const hasTailwindPackage = packageJson?.dependencies?.tailwindcss || packageJson?.devDependencies?.tailwindcss;
           
-          // Detect Tailwind version
+          // Detect Tailwind version - v4 uses @tailwindcss/postcss
           let tailwindVersion = null;
           if (hasTailwindPackage) {
-            const tailwindDep = packageJson?.dependencies?.tailwindcss || packageJson?.devDependencies?.tailwindcss;
-            if (tailwindDep) {
-              // Check for v4 indicators
-              if (tailwindDep.includes('^4.') || tailwindDep.includes('~4.') || tailwindDep.includes('4.')) {
+            // Check for @tailwindcss/postcss - definitive sign of v4
+            const hasTailwindPostCSS = packageJson?.dependencies?.['@tailwindcss/postcss'] || 
+                                       packageJson?.devDependencies?.['@tailwindcss/postcss'];
+            
+            if (hasTailwindPostCSS) {
+              tailwindVersion = 4;
+              console.log('Detected Tailwind CSS v4 (found @tailwindcss/postcss package)');
+            } else {
+              // Check the tailwindcss version string
+              const tailwindDep = packageJson?.dependencies?.tailwindcss || packageJson?.devDependencies?.tailwindcss;
+              console.log(`Tailwind dependency string: "${tailwindDep}"`);
+              
+              if (tailwindDep && (tailwindDep.includes('^4') || tailwindDep.includes('~4') || tailwindDep.match(/^4\./))) {
                 tailwindVersion = 4;
-                console.log('Detected Tailwind CSS v4 in package.json');
+                console.log('Detected Tailwind CSS v4 from version string');
               } else {
                 tailwindVersion = 3;
-                console.log('Detected Tailwind CSS v3 in package.json');
+                console.log('Detected Tailwind CSS v3');
               }
             }
           }
@@ -490,6 +499,7 @@ export const projectTools = [
           
           if (hasTailwindPackage) {
             // Check for Tailwind config with multiple possible extensions
+            // Note: Tailwind v4 doesn't require a config file, it's optional
             const tailwindConfigFiles = ['tailwind.config.js', 'tailwind.config.mjs', 'tailwind.config.ts'];
             for (const configFile of tailwindConfigFiles) {
               if (await fs.access(path.join(workspacePath, configFile)).then(() => true).catch(() => false)) {
@@ -497,6 +507,12 @@ export const projectTools = [
                 console.log(`Found existing Tailwind config: ${configFile}`);
                 break;
               }
+            }
+            
+            // For Tailwind v4, config file is optional
+            if (!hasTailwindConfig && tailwindVersion === 4) {
+              console.log('Tailwind v4 detected - config file is optional, not creating one');
+              hasTailwindConfig = true; // Mark as "has config" to skip creation
             }
             
             // Check for PostCSS config with multiple possible extensions
@@ -510,11 +526,13 @@ export const projectTools = [
             }
             
             if (!hasTailwindConfig || !hasPostCSSConfig) {
-              console.log('Project uses Tailwind but some configuration files are missing:');
-              if (!hasTailwindConfig) console.log('  - Missing Tailwind config');
-              if (!hasPostCSSConfig) console.log('  - Missing PostCSS config');
+              if (tailwindVersion !== 4 || !hasPostCSSConfig) {
+                console.log('Project uses Tailwind but some configuration files are missing:');
+                if (!hasTailwindConfig && tailwindVersion !== 4) console.log('  - Missing Tailwind config (required for v3)');
+                if (!hasPostCSSConfig) console.log('  - Missing PostCSS config');
+              }
             } else {
-              console.log('Project has both Tailwind and PostCSS configs, skipping config generation');
+              console.log('Project has all required Tailwind configurations');
             }
           } else {
             console.log('Project does not use Tailwind, will use existing CSS framework');
@@ -943,25 +961,18 @@ Requirements:
                 }
               }
               
-              // Create tailwind.config.js if missing
-              if (!hasTailwindConfig) {
-                console.log('Creating tailwind.config.js...');
-                // Determine Tailwind version for the config
-                let configVersion = 3;
-                try {
-                  const installedTailwindPath = path.join(workspacePath, 'node_modules', 'tailwindcss', 'package.json');
-                  const installedPackage = JSON.parse(await fs.readFile(installedTailwindPath, 'utf-8'));
-                  configVersion = parseInt(installedPackage.version.split('.')[0]);
-                } catch (e) {
-                  // Default to v3 if can't detect
-                }
-                const tailwindConfig = tailwindDetector.getTailwindConfig(configVersion);
+              // Create tailwind.config.js if missing (only for v3, not needed for v4)
+              if (!hasTailwindConfig && tailwindInfo.version < 4) {
+                console.log('Creating tailwind.config.js for Tailwind v3...');
+                const tailwindConfig = tailwindDetector.getTailwindConfig(tailwindInfo.version);
                 await fs.writeFile(path.join(workspacePath, 'tailwind.config.js'), tailwindConfig, 'utf-8');
                 createdFiles.push({
                   path: '/tailwind.config.js',
                   type: 'created',
                   diff: { added: tailwindConfig.split('\n').length, removed: 0, hunks: [] }
                 });
+              } else if (!hasTailwindConfig && tailwindInfo.version >= 4) {
+                console.log('Tailwind v4 detected - skipping tailwind.config.js creation (not required)');
               }
             } else {
               console.log('Both Tailwind and PostCSS configs exist, skipping Tailwind setup entirely');
@@ -1106,7 +1117,12 @@ Requirements:
               };
             } else {
               console.log('Running build validation and auto-fix...');
-              const buildValidator = new BuildValidator();
+              const buildValidator = new BuildValidator({
+                maxAttempts: 3,
+                restoreOnFail: true,
+                debugMode: process.env.BUILD_VALIDATION_DEBUG_MODE === 'true',
+                mode: process.env.BUILD_VALIDATION_MODE || 'smart'
+              });
               
               try {
                 buildValidationResult = await buildValidator.validateAndFix(

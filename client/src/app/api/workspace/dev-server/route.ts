@@ -20,19 +20,20 @@ const devServers = new Map<string, {
   status: 'starting' | 'running' | 'error';
 }>();
 
-// Get the main app's port from environment or URL
+// Get the main app's port dynamically
 function getMainAppPort(): number {
   // Try to get from environment variable
   if (process.env.PORT) {
     return parseInt(process.env.PORT);
   }
   
-  // Default to 3000 for Next.js apps
+  // Try to detect from request headers if available
+  // For now, default to 3000 for Next.js apps (most common)
   return 3000;
 }
 
 // Find an available port, with safety limits
-async function findAvailablePort(startPort: number = 4001): Promise<number> {
+async function findAvailablePort(startPort: number = 4000): Promise<number> {
   const maxPort = 9999; // Maximum port to try
   const mainAppPort = getMainAppPort();
   
@@ -232,9 +233,9 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Find an available port starting from 4001 to avoid common development ports
-    // This will skip ports like 3000, 3001, 4000, 4200, 5000, 5173, 8000, 8080 etc.
-    const port = await findAvailablePort(4001);
+    // Find an available port dynamically starting from default (4000)
+    // This will skip the main app port and other common development ports
+    const port = await findAvailablePort();
     const url = `http://localhost:${port}`;
     
     console.log(`Found available port: ${port} for project ${projectId}`);

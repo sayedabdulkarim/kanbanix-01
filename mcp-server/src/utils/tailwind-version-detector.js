@@ -10,17 +10,42 @@ class TailwindVersionDetector {
     try {
       console.log('Detecting Tailwind CSS version...');
       
+      // Check if PostCSS config already exists and is correct
+      const existingConfigs = ['postcss.config.js', 'postcss.config.mjs', 'postcss.config.ts'];
+      let existingConfigFile = null;
+      let existingConfigContent = null;
+      
+      for (const file of existingConfigs) {
+        const filePath = path.join(projectPath, file);
+        try {
+          existingConfigContent = await fs.readFile(filePath, 'utf-8');
+          existingConfigFile = file;
+          console.log(`Found existing PostCSS config: ${file}`);
+          break;
+        } catch (err) {
+          // File doesn't exist, continue checking
+        }
+      }
+      
+      // If we have an existing config and it contains @tailwindcss/postcss, it's v4 and correct
+      if (existingConfigContent && existingConfigContent.includes('@tailwindcss/postcss')) {
+        console.log('Existing PostCSS config is already configured for Tailwind v4, keeping it');
+        return {
+          version: 4,
+          configCreated: false,
+          requiredPackages: ['@tailwindcss/postcss'],
+          postcssConfig: existingConfigContent
+        };
+      }
+      
       // Only clean up existing configs if we're forcing recreation
-      if (forceRecreate) {
-        const configFiles = ['postcss.config.js', 'postcss.config.mjs', 'postcss.config.ts'];
-        for (const file of configFiles) {
-          const filePath = path.join(projectPath, file);
-          try {
-            await fs.unlink(filePath);
-            console.log(`Removed existing ${file}`);
-          } catch (err) {
-            // File doesn't exist, which is fine
-          }
+      if (forceRecreate && existingConfigFile) {
+        const filePath = path.join(projectPath, existingConfigFile);
+        try {
+          await fs.unlink(filePath);
+          console.log(`Removed existing ${existingConfigFile} for recreation`);
+        } catch (err) {
+          // File doesn't exist, which is fine
         }
       }
       
@@ -30,30 +55,38 @@ class TailwindVersionDetector {
         const packageJsonPath = path.join(projectPath, 'package.json');
         const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
         
-        // Check actual installed version in node_modules if available
-        try {
-          const tailwindPackagePath = path.join(projectPath, 'node_modules', 'tailwindcss', 'package.json');
-          const tailwindPackage = JSON.parse(await fs.readFile(tailwindPackagePath, 'utf-8'));
-          const installedVersion = tailwindPackage.version;
-          tailwindVersion = parseInt(installedVersion.split('.')[0]);
-          
-          console.log(`Detected installed Tailwind CSS v${installedVersion}`);
-        } catch (e) {
-          // If can't read from node_modules, check package.json dependency
-          const tailwindDep = packageJson.dependencies?.tailwindcss || packageJson.devDependencies?.tailwindcss;
-          if (tailwindDep) {
-            // Parse version from dependency string
-            // Handle cases like "^4.0.0", "~3.4.0", "4.x", "4.0.0-alpha.30", etc.
-            const versionMatch = tailwindDep.match(/[~^]?(\d+)\./);
-            if (versionMatch) {
-              tailwindVersion = parseInt(versionMatch[1]);
-              console.log(`Detected Tailwind CSS v${tailwindVersion} from package.json`);
-            }
+        // First check for @tailwindcss/postcss - definitive sign of v4
+        const hasTailwindPostCSS = packageJson.dependencies?.['@tailwindcss/postcss'] || 
+                                   packageJson.devDependencies?.['@tailwindcss/postcss'];
+        
+        if (hasTailwindPostCSS) {
+          tailwindVersion = 4;
+          console.log('Detected Tailwind CSS v4 (found @tailwindcss/postcss package)');
+        } else {
+          // Check actual installed version in node_modules if available
+          try {
+            const tailwindPackagePath = path.join(projectPath, 'node_modules', 'tailwindcss', 'package.json');
+            const tailwindPackage = JSON.parse(await fs.readFile(tailwindPackagePath, 'utf-8'));
+            const installedVersion = tailwindPackage.version;
+            tailwindVersion = parseInt(installedVersion.split('.')[0]);
             
-            // Special check for v4 alpha/beta versions
-            if (tailwindDep.includes('4.0.0-alpha') || tailwindDep.includes('4.0.0-beta')) {
-              tailwindVersion = 4;
-              console.log('Detected Tailwind CSS v4 (alpha/beta)');
+            console.log(`Detected installed Tailwind CSS v${installedVersion}`);
+          } catch (e) {
+            // If can't read from node_modules, check package.json dependency
+            const tailwindDep = packageJson.dependencies?.tailwindcss || packageJson.devDependencies?.tailwindcss;
+            if (tailwindDep) {
+              // Parse version from dependency string
+              const versionMatch = tailwindDep.match(/[~^]?(\d+)\./);
+              if (versionMatch) {
+                tailwindVersion = parseInt(versionMatch[1]);
+                console.log(`Detected Tailwind CSS v${tailwindVersion} from package.json`);
+              }
+              
+              // Special check for v4 versions
+              if (tailwindDep.includes('^4') || tailwindDep.includes('~4') || tailwindDep.match(/^4\./)) {
+                tailwindVersion = 4;
+                console.log('Detected Tailwind CSS v4 from version string');
+              }
             }
           }
         }
