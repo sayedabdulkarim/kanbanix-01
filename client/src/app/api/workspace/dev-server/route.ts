@@ -131,14 +131,104 @@ async function cleanupStaleDevServer(projectId: string) {
 // POST: Start dev server
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Check for internal API key for server-to-server calls
+    const internalApiKey = request.headers.get('x-internal-api-key');
+    // In production, use INTERNAL_API_KEY env var; in dev, allow both
+    const isInternalCall = process.env.NODE_ENV === 'development' 
+      ? (internalApiKey === process.env.INTERNAL_API_KEY || internalApiKey === 'dev-internal-call')
+      : (internalApiKey === process.env.INTERNAL_API_KEY);
+    
+    // Get session for authentication and session tracking
+    let userSession = null;
+    if (!isInternalCall) {
+      userSession = await getServerSession(authOptions);
+      if (!userSession?.user?.id) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
     }
 
     const { projectId, taskId, executionId } = await request.json();
     if (!projectId) {
       return NextResponse.json({ error: 'Project ID required' }, { status: 400 });
+    }
+
+    // Check if there's an active session with dev server already started
+    const sessionState = await prisma.sessionState.findFirst({
+      where: {
+        projectId,
+        isActive: true
+      }
+    });
+
+    if (sessionState?.devServerStarted) {
+      // Dev server was already started in this session
+      console.log(`Dev server already started for session ${sessionState.id} on port ${sessionState.devServerPort}`);
+      
+      // Check if it's actually still running
+      const server = devServers.get(projectId);
+      if (server) {
+        return NextResponse.json({
+          success: true,
+          status: 'running',
+          port: sessionState.devServerPort!,
+          url: sessionState.devServerUrl!,
+          command: 'Already running from session',
+          startedAt: server.startedAt,
+          message: 'Using existing dev server from current session - changes will hot-reload automatically'
+        });
+      } else {
+        // Server info is in session but server is not in memory
+        // Check if the port is actually still in use
+        const portInUse = await new Promise<boolean>((resolve) => {
+          const tester = net.createServer()
+            .once('error', (err: any) => {
+              if (err.code === 'EADDRINUSE') {
+                resolve(true); // Port is in use
+              } else {
+                resolve(false);
+              }
+            })
+            .once('listening', () => {
+              tester.close();
+              resolve(false); // Port is free
+            })
+            .listen(sessionState.devServerPort, '127.0.0.1');
+        });
+        
+        if (portInUse) {
+          console.log(`Port ${sessionState.devServerPort} is still in use - dev server is running but lost from memory`);
+          // Re-add to memory map to track it
+          devServers.set(projectId, {
+            process: null as any, // We don't have the process reference anymore
+            port: sessionState.devServerPort!,
+            url: sessionState.devServerUrl!,
+            projectId,
+            startedAt: new Date(),
+            status: 'running'
+          });
+          
+          return NextResponse.json({
+            success: true,
+            status: 'running',
+            port: sessionState.devServerPort!,
+            url: sessionState.devServerUrl!,
+            command: 'Already running (recovered)',
+            startedAt: new Date(),
+            message: 'Using existing dev server from current session - changes will hot-reload automatically'
+          });
+        } else {
+          // Port is free, server actually died - clear session state and start fresh
+          console.log('Session indicates dev server should be running but port is free - clearing state');
+          await prisma.sessionState.update({
+            where: { id: sessionState.id },
+            data: {
+              devServerStarted: false,
+              devServerPort: null,
+              devServerUrl: null
+            }
+          });
+        }
+      }
     }
 
     // Check if server already running and cleanup if stale
@@ -148,27 +238,19 @@ export async function POST(request: NextRequest) {
       if (isStillRunning) {
         const server = devServers.get(projectId)!;
         
-        // Kill the existing server to force restart with new code
-        console.log(`Killing existing dev server on port ${server.port} to restart with new code`);
-        try {
-          server.process.kill('SIGTERM');
-          // Give it a moment to cleanup
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          // Force kill if still running
-          try {
-            process.kill(server.process.pid!, 0);
-            server.process.kill('SIGKILL');
-          } catch {
-            // Process already dead
-          }
-        } catch (e) {
-          console.error('Error killing dev server:', e);
-        }
+        // Server is already running - just return the existing info
+        // Dev servers (Next.js, Vite, etc.) automatically hot-reload changes
+        console.log(`Dev server already running on port ${server.port} - will hot-reload new changes`);
         
-        // Remove from map
-        devServers.delete(projectId);
-        
-        // Continue to start new server below
+        return NextResponse.json({
+          success: true,
+          status: 'running',
+          port: server.port,
+          url: server.url,
+          command: 'Already running',
+          startedAt: server.startedAt,
+          message: 'Using existing dev server - changes will hot-reload automatically'
+        });
       }
     }
 
@@ -395,6 +477,19 @@ export async function POST(request: NextRequest) {
     // Get the updated server info
     const updatedServer = devServers.get(projectId);
 
+    // Update session state with dev server info
+    if (sessionState) {
+      await prisma.sessionState.update({
+        where: { id: sessionState.id },
+        data: {
+          devServerStarted: true,
+          devServerPort: actualPort,
+          devServerUrl: actualUrl
+        }
+      });
+      console.log(`Updated session ${sessionState.id} with dev server info - port: ${actualPort}`);
+    }
+
     return NextResponse.json({
       success: true,
       status: updatedServer?.status || 'starting',
@@ -470,6 +565,26 @@ export async function DELETE(request: NextRequest) {
     devServers.delete(projectId);
 
     console.log(`Stopped dev server for project ${projectId}`);
+
+    // Clear session dev server info
+    const sessionState = await prisma.sessionState.findFirst({
+      where: {
+        projectId,
+        isActive: true
+      }
+    });
+
+    if (sessionState) {
+      await prisma.sessionState.update({
+        where: { id: sessionState.id },
+        data: {
+          devServerStarted: false,
+          devServerPort: null,
+          devServerUrl: null
+        }
+      });
+      console.log(`Cleared dev server info from session ${sessionState.id}`);
+    }
 
     return NextResponse.json({
       success: true,

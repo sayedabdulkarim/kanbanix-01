@@ -331,11 +331,25 @@ export class AIAgentService {
     
     await this.updateProgress(executionId, 30, 'Calling MCP server for code generation');
     
+    // Check if dev server is running in the current session
+    const sessionState = await this.prisma.sessionState.findFirst({
+      where: {
+        projectId: execution.task.projectId,
+        isActive: true
+      }
+    });
+    
+    // Add devServerRunning flag to context
+    const enhancedContext = {
+      ...input.context,
+      devServerRunning: sessionState?.devServerStarted || false
+    };
+    
     // Call MCP server (or Claude API based on mode)
     const mcpResult = await this.callMCPTool('generate_task_code', {
       task_title: input.title,
       task_description: input.description,
-      context: input.context,
+      context: enhancedContext,
       projectId: execution.task.projectId,
       workspacePath: input.context.workspacePath || `/tmp/workspace/${execution.task.projectId}`
     }, executionId);
@@ -481,11 +495,25 @@ export class AIAgentService {
     
     await this.updateProgress(executionId, 60, 'Generating bug fix');
     
+    // Check if dev server is running in the current session
+    const sessionState = await this.prisma.sessionState.findFirst({
+      where: {
+        projectId: execution.task.projectId,
+        isActive: true
+      }
+    });
+    
+    // Add devServerRunning flag to context
+    const enhancedContext = {
+      ...input.context,
+      devServerRunning: sessionState?.devServerStarted || false
+    };
+    
     // Use generate_task_code tool instead of non-existent fix_bug
     const mcpResult = await this.callMCPTool('generate_task_code', {
       task_title: input.title,
       task_description: input.description || `Fix: ${input.title}`,
-      context: input.context,
+      context: enhancedContext,
       projectId: execution.task.projectId,
       workspacePath: input.context.workspacePath || `/tmp/workspace/${execution.task.projectId}`,
       executionId
@@ -702,14 +730,22 @@ export class AIAgentService {
     try {
       console.log('Starting dev server for project:', projectId);
       
-      // Use relative URL to let fetch resolve the correct base URL automatically
-      const url = '/api/workspace/dev-server';
+      // Since this runs server-side in API routes, we need to construct the full URL
+      // The main Kanbanix app API is on port 3000 (or PORT env var)
+      // The dev server itself will start on 4000+ (handled by the API)
+      const mainAppPort = process.env.PORT || 3000;
+      const baseUrl = `http://localhost:${mainAppPort}`;
+      const url = `${baseUrl}/api/workspace/dev-server`;
+      
+      console.log('Calling dev server API at:', url);
       
       // Call the API to actually start the dev server
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          // Use env var in production, fallback for development
+          'x-internal-api-key': process.env.INTERNAL_API_KEY || 'dev-internal-call'
         },
         body: JSON.stringify({ 
           projectId, 

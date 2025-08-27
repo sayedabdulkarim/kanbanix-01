@@ -105,8 +105,12 @@ class BuildValidator {
     console.log(`[Build Validator] Starting validation for project: ${projectPath} (mode: ${this.mode})`);
     this.debug('Task description', taskDescription);
     
-    // First, clean up any stale .next directory
-    await this.cleanupIncompleteBuilds(projectPath);
+    // Skip cleanup when dev server might be running
+    // Dev servers need their build folders (.next, dist, etc.) to serve pages
+    // Only clean if explicitly requested or if we detect no dev server
+    if (this.mode === 'strict' && !process.env.DEV_SERVER_RUNNING) {
+      await this.cleanupIncompleteBuilds(projectPath);
+    }
     
     while (attempt < this.maxAttempts) {
       attempt++;

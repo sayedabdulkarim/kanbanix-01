@@ -348,6 +348,9 @@ model SessionState {
   // Session metadata
   isActive                Boolean   @default(true) // Whether this is the active session
   workspacePath           String?   // Physical workspace path on server
+  devServerStarted        Boolean   @default(false) // Whether dev server was started in this session
+  devServerPort           Int?      // Port number of the running dev server
+  devServerUrl            String?   // URL of the running dev server
   
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt

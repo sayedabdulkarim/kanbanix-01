@@ -1103,7 +1103,18 @@ Requirements:
           const enableBuildValidation = process.env.ENABLE_BUILD_VALIDATION === 'true';
           let buildValidationResult = null;
           
-          if (enableBuildValidation && process.env.ANTHROPIC_API_KEY) {
+          // Check if dev server is running (passed via context)
+          const devServerRunning = context?.devServerRunning || false;
+          
+          if (devServerRunning) {
+            console.log('Build validation skipped - dev server is running (would conflict with production build)');
+            buildValidationResult = {
+              success: true,
+              skipped: true,
+              reason: 'Dev server running - build validation would interfere',
+              confidence: 1.0
+            };
+          } else if (enableBuildValidation && process.env.ANTHROPIC_API_KEY) {
             const buildDecision = analyzeIfBuildNeeded();
             
             // Skip build for simple changes with high confidence
