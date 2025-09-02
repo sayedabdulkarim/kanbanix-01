@@ -237,31 +237,10 @@ export async function POST(request: NextRequest) {
           console.log(`Updated ${updatedTasks.count} tasks from inReview to done status (without column change)`);
         }
 
-        // 2. Kill any running dev servers before resetting session (only once)
-        console.log('Stopping dev server before session reset...');
+        // 2. Keep dev server running - we'll reuse it in the new session
+        console.log('Keeping dev server running for continuity...');
         
-        // Try to stop dev server through our API (cleanest approach)
-        try {
-          const baseUrl = request.url.split('/api/')[0];
-          const deleteUrl = `${baseUrl}/api/workspace/dev-server?projectId=${projectId}`;
-          
-          const stopResponse = await fetch(deleteUrl, {
-            method: 'DELETE',
-            headers: {
-              'Cookie': request.headers.get('cookie') || ''
-            }
-          });
-          
-          if (stopResponse.ok) {
-            console.log('Stopped dev server via API');
-            // Wait a bit for the server to fully stop
-            await new Promise(resolve => setTimeout(resolve, 500));
-          }
-        } catch (apiError) {
-          console.error('Error stopping dev server via API:', apiError);
-        }
-
-        // 3. First check if there are any active sessions to deactivate
+        // 3. First check if there are any active sessions to deactivate and get dev server info
         const activeSessions = await prisma.sessionState.findMany({
           where: {
             projectId,
@@ -269,6 +248,22 @@ export async function POST(request: NextRequest) {
             isActive: true
           }
         });
+        
+        // Preserve dev server info from the active session
+        let devServerInfo = {
+          port: null as number | null,
+          url: null as string | null,
+          startedAt: null as Date | null
+        };
+        
+        if (activeSessions.length > 0 && activeSessions[0].devServerPort) {
+          devServerInfo = {
+            port: activeSessions[0].devServerPort,
+            url: activeSessions[0].devServerUrl,
+            startedAt: activeSessions[0].devServerStartedAt
+          };
+          console.log(`Preserving dev server info - port: ${devServerInfo.port}`);
+        }
         
         if (activeSessions.length > 0) {
           // Use a transaction to ensure atomic updates
@@ -316,7 +311,11 @@ export async function POST(request: NextRequest) {
                 totalCommitsInSession: 0,
                 prCreated: false,
                 prUrl: null,
-                prNumber: null
+                prNumber: null,
+                // Preserve dev server info from previous session
+                devServerPort: devServerInfo.port,
+                devServerUrl: devServerInfo.url,
+                devServerStartedAt: devServerInfo.startedAt
               }
             });
             
@@ -352,7 +351,11 @@ export async function POST(request: NextRequest) {
                   totalCommitsInSession: 0,
                   prCreated: false,
                   prUrl: null,
-                  prNumber: null
+                  prNumber: null,
+                  // Preserve dev server info from previous session
+                  devServerPort: devServerInfo.port,
+                  devServerUrl: devServerInfo.url,
+                  devServerStartedAt: devServerInfo.startedAt
                 }
               });
               
