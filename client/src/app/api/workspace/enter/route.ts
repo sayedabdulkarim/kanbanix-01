@@ -349,6 +349,99 @@ export async function POST(request: NextRequest) {
     // Get current branch info
     const branchInfo = await gitService.getBranchInfo(workspacePath);
 
+    // Check for existing PRs from tasks in this project
+    let existingPR = null;
+    try {
+      // Find any task with a PR in this project
+      const taskWithPR = await prisma.task.findFirst({
+        where: {
+          projectId,
+          githubPrNumber: { not: null },
+          status: 'inReview'
+        },
+        orderBy: {
+          updatedAt: 'desc'
+        }
+      });
+
+      if (taskWithPR && taskWithPR.githubPrNumber && session.accessToken) {
+        // Check if PR still exists on GitHub
+        try {
+          const octokit = new Octokit({
+            auth: session.accessToken,
+          });
+
+          const { data: pr } = await octokit.pulls.get({
+            owner: project.githubOwner,
+            repo: project.githubRepo,
+            pull_number: taskWithPR.githubPrNumber,
+          });
+
+          if (pr && pr.state === 'open') {
+            existingPR = {
+              number: pr.number,
+              url: pr.html_url,
+              title: pr.title,
+              branch: pr.head.ref,
+              state: pr.state
+            };
+            console.log('Found existing open PR:', existingPR);
+            
+            // Switch to the PR branch if it exists locally or remotely
+            try {
+              // First fetch all branches
+              await execAsync('git fetch origin', { cwd: workspacePath });
+              
+              // Check if branch exists remotely
+              const { stdout: remoteBranches } = await execAsync(
+                `git branch -r | grep -w "origin/${pr.head.ref}" || true`,
+                { cwd: workspacePath }
+              );
+              
+              if (remoteBranches.trim()) {
+                // Branch exists remotely, checkout
+                await execAsync(`git checkout -B ${pr.head.ref} origin/${pr.head.ref}`, {
+                  cwd: workspacePath
+                });
+                branchName = pr.head.ref;
+                console.log(`Switched to existing PR branch: ${branchName}`);
+              }
+            } catch (branchError) {
+              console.warn('Could not switch to PR branch:', branchError);
+            }
+          } else if (pr && pr.state === 'closed' && pr.merged) {
+            // PR was merged, update task status to done
+            const doneColumn = await prisma.column.findFirst({
+              where: {
+                projectId,
+                OR: [
+                  { name: { contains: 'Done' } },
+                  { name: { contains: 'done' } },
+                  { name: { contains: 'Complete' } }
+                ]
+              }
+            });
+
+            if (doneColumn) {
+              await prisma.task.update({
+                where: { id: taskWithPR.id },
+                data: {
+                  status: 'done',
+                  columnId: doneColumn.id,
+                  githubState: 'merged'
+                }
+              });
+              console.log('Updated merged task to done status');
+            }
+          }
+        } catch (prCheckError) {
+          console.warn('Could not check PR status on GitHub:', prCheckError);
+        }
+      }
+    } catch (prSearchError) {
+      console.error('Error searching for existing PRs:', prSearchError);
+    }
+
     // Initialize or update SessionState
     try {
       // First, find any existing active session
@@ -360,17 +453,24 @@ export async function POST(request: NextRequest) {
         }
       });
 
+      const sessionData = {
+        sessionBranch: branchName,
+        baseBranch: 'main',
+        workspacePath,
+        hasUncommittedChanges: branchInfo.hasUncommittedChanges,
+        // Restore PR info if found
+        prCreated: existingPR ? true : false,
+        prUrl: existingPR?.url || null,
+        prNumber: existingPR?.number || null,
+        prTitle: existingPR?.title || null,
+        updatedAt: new Date()
+      };
+
       if (existingSession) {
         // Update existing session with new branch info
         await prisma.sessionState.update({
           where: { id: existingSession.id },
-          data: {
-            sessionBranch: branchName,
-            baseBranch: 'main',
-            workspacePath,
-            hasUncommittedChanges: branchInfo.hasUncommittedChanges,
-            updatedAt: new Date()
-          }
+          data: sessionData
         });
         console.log('SessionState updated for project:', projectId);
       } else {
@@ -379,11 +479,8 @@ export async function POST(request: NextRequest) {
           data: {
             projectId,
             userId: session.user.id,
-            sessionBranch: branchName,
-            baseBranch: 'main',
-            workspacePath,
+            ...sessionData,
             isActive: true,
-            hasUncommittedChanges: branchInfo.hasUncommittedChanges,
             totalCommitsInSession: 0
           }
         });

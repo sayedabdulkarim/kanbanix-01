@@ -15,6 +15,9 @@ const WORKSPACE_CONFIG = {
   basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), 'projects'),
 };
 
+// Track ongoing merge processes to prevent duplicates
+const ongoingMerges = new Map<string, boolean>();
+
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -44,10 +47,83 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    if (!sessionState || !sessionState.prNumber) {
+    // Also check for PR info in tasks (persistent across sessions)
+    let prNumber = sessionState?.prNumber;
+    let taskWithPR = null;
+    
+    console.log(`[PR Status Check] Initial PR number from session: ${prNumber}`);
+    
+    if (!prNumber) {
+      taskWithPR = await prisma.task.findFirst({
+        where: {
+          projectId,
+          githubPrNumber: { not: null },
+          status: 'inReview'
+        },
+        orderBy: {
+          updatedAt: 'desc'
+        }
+      });
+      
+      console.log(`[PR Status Check] Task with PR found:`, taskWithPR ? `Task ${taskWithPR.id} with PR #${taskWithPR.githubPrNumber}` : 'None');
+      
+      if (taskWithPR?.githubPrNumber) {
+        prNumber = taskWithPR.githubPrNumber;
+      }
+    }
+    
+    // Check if PR was already processed (tasks moved to done)
+    if (!prNumber && !sessionState?.prNumber) {
+      // Also check if there are tasks in done with the same PR that was just merged
+      const mergedTask = await prisma.task.findFirst({
+        where: {
+          projectId,
+          githubPrNumber: { not: null },
+          status: 'done',
+          githubState: 'merged'
+        },
+        orderBy: {
+          updatedAt: 'desc'
+        }
+      });
+      
+      if (mergedTask) {
+        // PR was already processed, don't re-process
+        return NextResponse.json({ 
+          prExists: false,
+          message: 'PR already processed and merged',
+          alreadyProcessed: true
+        });
+      }
+    }
+
+    if (!prNumber) {
+      // Log more details for debugging
+      const allTasksInReview = await prisma.task.count({
+        where: {
+          projectId,
+          status: 'inReview'
+        }
+      });
+      
+      const tasksWithPRInReview = await prisma.task.count({
+        where: {
+          projectId,
+          status: 'inReview',
+          githubPrNumber: { not: null }
+        }
+      });
+      
+      console.log(`[PR Status Check] No PR found. Tasks in review: ${allTasksInReview}, Tasks with PR: ${tasksWithPRInReview}`);
+      
       return NextResponse.json({ 
         prExists: false,
-        message: 'No PR associated with current session' 
+        message: 'No PR associated with current session or tasks',
+        debug: {
+          sessionHasPR: !!sessionState?.prNumber,
+          tasksInReview: allTasksInReview,
+          tasksWithPR: tasksWithPRInReview
+        }
       });
     }
 
@@ -60,27 +136,54 @@ export async function POST(request: NextRequest) {
       const { data: pr } = await octokit.pulls.get({
         owner: project.githubOwner,
         repo: project.githubRepo,
-        pull_number: sessionState.prNumber
+        pull_number: prNumber
       });
 
       // Check if PR is merged
       if (pr.merged) {
-        // Check if we've already processed this merge
-        if (sessionState.prMerged) {
-          console.log(`PR #${sessionState.prNumber} already processed as merged`);
+        // Check if we're already processing this merge
+        const mergeKey = `${projectId}-${prNumber}`;
+        if (ongoingMerges.get(mergeKey)) {
+          console.log(`PR #${prNumber} merge already being processed, skipping duplicate`);
           return NextResponse.json({
             prExists: true,
             prMerged: true,
-            prNumber: sessionState.prNumber,
+            prNumber: prNumber,
+            message: 'PR merge is being processed',
+            processing: true
+          });
+        }
+        
+        // Check if we've already processed this merge by looking at task status
+        const tasksInDone = await prisma.task.findMany({
+          where: {
+            projectId,
+            githubPrNumber: prNumber,
+            status: 'done',
+            githubState: 'merged'
+          }
+        });
+        
+        if (tasksInDone.length > 0 || sessionState?.prMerged) {
+          console.log(`PR #${prNumber} already processed as merged (${tasksInDone.length} tasks in done)`);
+          return NextResponse.json({
+            prExists: true,
+            prMerged: true,
+            prNumber: prNumber,
             message: 'PR already processed as merged',
             alreadyProcessed: true
           });
         }
         
-        console.log(`PR #${sessionState.prNumber} has been merged. Resetting session...`);
+        // Mark that we're processing this merge
+        ongoingMerges.set(mergeKey, true);
+        
+        console.log(`PR #${prNumber} has been merged. Resetting session...`);
         
         // Define workspace path for use throughout the reset process
         const workspacePath = path.join(WORKSPACE_CONFIG.basePath, projectId);
+        
+        try {
 
         // 1. Move all tasks in review to done
         const allColumns = await prisma.column.findMany({
@@ -109,7 +212,8 @@ export async function POST(request: NextRequest) {
             data: {
               status: 'done',
               columnId: doneColumn.id,
-              completedAt: new Date()
+              completedAt: new Date(),
+              githubState: 'merged'
             }
           });
           console.log(`Moved ${result.count} tasks from In Review (${inReviewColumn.id}) to Done (${doneColumn.id})`);
@@ -126,125 +230,172 @@ export async function POST(request: NextRequest) {
             },
             data: {
               status: 'done',
-              completedAt: new Date()
+              completedAt: new Date(),
+              githubState: 'merged'
             }
           });
           console.log(`Updated ${updatedTasks.count} tasks from inReview to done status (without column change)`);
         }
 
-        // 2. Kill any running dev servers before resetting session
-        console.log('Killing any running dev servers before session reset...');
+        // 2. Kill any running dev servers before resetting session (only once)
+        console.log('Stopping dev server before session reset...');
         
-        // First, try to stop dev server through our API (cleanest approach)
+        // Try to stop dev server through our API (cleanest approach)
         try {
           const baseUrl = request.url.split('/api/')[0];
           const deleteUrl = `${baseUrl}/api/workspace/dev-server?projectId=${projectId}`;
           
-          await fetch(deleteUrl, {
+          const stopResponse = await fetch(deleteUrl, {
             method: 'DELETE',
             headers: {
               'Cookie': request.headers.get('cookie') || ''
             }
           });
-          console.log('Stopped dev server via API');
+          
+          if (stopResponse.ok) {
+            console.log('Stopped dev server via API');
+            // Wait a bit for the server to fully stop
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
         } catch (apiError) {
           console.error('Error stopping dev server via API:', apiError);
         }
-        
-        // Then do system-level cleanup as backup
-        try {
-          // Kill all node processes running on common ports (4001-4010)
-          for (let port = 4001; port <= 4010; port++) {
-            try {
-              await execAsync(`lsof -ti:${port} | xargs kill -9`, { cwd: workspacePath });
-              console.log(`Killed process on port ${port}`);
-            } catch (e) {
-              // Port might not be in use, that's fine
-            }
-          }
-          
-          // Also try to kill any npm/node processes in the workspace
-          try {
-            await execAsync(`pkill -f "npm.*${projectId}"`, { cwd: workspacePath });
-          } catch (e) {
-            // Process might not exist
-          }
-          
-          try {
-            await execAsync(`pkill -f "node.*${projectId}"`, { cwd: workspacePath });
-          } catch (e) {
-            // Process might not exist
-          }
-        } catch (killError) {
-          console.error('Error killing dev servers:', killError);
-          // Continue anyway - processes might already be dead
-        }
 
-        // 3. Mark current session as inactive FIRST (before creating new one)
-        await prisma.sessionState.update({
-          where: { id: sessionState.id },
-          data: {
-            isActive: false,
-            prMerged: true,
-            prMergedAt: new Date()
-          }
-        });
-        console.log('Current session marked as inactive');
-
-        // 4. Mark ALL active sessions for this project/user as inactive (cleanup)
-        const deactivatedCount = await prisma.sessionState.updateMany({
+        // 3. First check if there are any active sessions to deactivate
+        const activeSessions = await prisma.sessionState.findMany({
           where: {
             projectId,
             userId: session.user.id,
             isActive: true
-          },
-          data: { isActive: false }
+          }
         });
         
-        if (deactivatedCount.count > 0) {
-          console.log(`Deactivated ${deactivatedCount.count} remaining active sessions`);
+        if (activeSessions.length > 0) {
+          // Use a transaction to ensure atomic updates
+          await prisma.$transaction(async (tx) => {
+            // Delete all active sessions to avoid unique constraint issues
+            await tx.sessionState.deleteMany({
+              where: {
+                projectId,
+                userId: session.user.id,
+                isActive: true
+              }
+            });
+            
+            console.log(`Deleted ${activeSessions.length} active session(s)`);
+          });
+        } else {
+          console.log('No active sessions to deactivate');
         }
+        
+        // Add a small delay to ensure database consistency
+        await new Promise(resolve => setTimeout(resolve, 100));
 
         // 5. Create new session with fresh branch
         try {
-          // Switch back to main and pull latest
+          // Switch back to main and reset to match remote
           await execAsync('git checkout main', { cwd: workspacePath });
-          await execAsync('git pull origin main', { cwd: workspacePath });
+          await execAsync('git fetch origin', { cwd: workspacePath });
+          await execAsync('git reset --hard origin/main', { cwd: workspacePath });
           
           // Create new session branch
           const newSessionBranch = gitService.createSessionBranchName(projectId);
           await execAsync(`git checkout -b ${newSessionBranch}`, { cwd: workspacePath });
           
           // Create new session state (now guaranteed no active session exists)
-          const newSession = await prisma.sessionState.create({
-            data: {
-              projectId,
-              userId: session.user.id,
-              sessionBranch: newSessionBranch,
-              baseBranch: 'main',
-              workspacePath,
-              isActive: true,
-              hasUncommittedChanges: false,
-              totalCommitsInSession: 0,
-              prCreated: false,
-              prUrl: null,
-              prNumber: null
+          try {
+            const newSession = await prisma.sessionState.create({
+              data: {
+                projectId,
+                userId: session.user.id,
+                sessionBranch: newSessionBranch,
+                baseBranch: 'main',
+                workspacePath,
+                isActive: true,
+                hasUncommittedChanges: false,
+                totalCommitsInSession: 0,
+                prCreated: false,
+                prUrl: null,
+                prNumber: null
+              }
+            });
+            
+            console.log(`Created new session ${newSession.id} with branch: ${newSessionBranch}`);
+          } catch (createError: any) {
+            // If creation fails due to unique constraint, try to clean up and retry
+            if (createError.code === 'P2002') {
+              console.log('Unique constraint error, cleaning up and retrying...');
+              
+              // Ensure all sessions are inactive
+              await prisma.sessionState.updateMany({
+                where: {
+                  projectId,
+                  userId: session.user.id,
+                  isActive: true
+                },
+                data: { isActive: false }
+              });
+              
+              // Wait a bit more
+              await new Promise(resolve => setTimeout(resolve, 200));
+              
+              // Try one more time
+              const newSession = await prisma.sessionState.create({
+                data: {
+                  projectId,
+                  userId: session.user.id,
+                  sessionBranch: newSessionBranch,
+                  baseBranch: 'main',
+                  workspacePath,
+                  isActive: true,
+                  hasUncommittedChanges: false,
+                  totalCommitsInSession: 0,
+                  prCreated: false,
+                  prUrl: null,
+                  prNumber: null
+                }
+              });
+              
+              console.log(`Created new session ${newSession.id} with branch: ${newSessionBranch} (on retry)`);
+            } else {
+              throw createError;
             }
-          });
-          
-          console.log(`Created new session ${newSession.id} with branch: ${newSessionBranch}`);
+          }
         } catch (gitError) {
           console.error('Error creating new session branch:', gitError);
           // Continue anyway - user can manually fix if needed
         }
-
+        
+        // If we got here, the merge was processed successfully
+        // Clear the ongoing merge flag
+        ongoingMerges.delete(mergeKey);
+        
         return NextResponse.json({
           prExists: true,
           prMerged: true,
-          prNumber: sessionState.prNumber,
+          prNumber: prNumber,
           message: 'PR was merged. Session has been reset with new branch.',
           newSession: true
         });
+        
+        } catch (mergeError: any) {
+          console.error('Error processing PR merge:', mergeError);
+          
+          // Clear the ongoing merge flag
+          const mergeKey = `${projectId}-${prNumber}`;
+          ongoingMerges.delete(mergeKey);
+          
+          // Still return success but indicate there was an issue
+          // This prevents the UI from breaking
+          return NextResponse.json({
+            prExists: true,
+            prMerged: true,
+            prNumber: prNumber,
+            message: 'PR was merged but there was an issue resetting the session. Please refresh the page.',
+            warning: true,
+            error: mergeError.message
+          });
+        }
       }
 
       // PR exists but not merged

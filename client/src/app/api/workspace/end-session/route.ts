@@ -47,6 +47,8 @@ export async function POST(request: NextRequest) {
       
       if (devServerResponse.ok) {
         console.log('Generated project dev server stopped successfully');
+        // Wait for the dev server process to fully terminate
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     } catch (error) {
       console.error('Error stopping dev server:', error);
@@ -63,12 +65,31 @@ export async function POST(request: NextRequest) {
       await fs.access(workspacePath);
       console.log(`Deleting workspace folder: ${workspacePath}`);
       
-      // Remove the entire project folder
+      // First try to delete common build/cache folders that might have locked files
+      const buildFolders = ['.next', 'dist', 'build', '.angular', '.nuxt', '.svelte-kit', 'node_modules/.cache'];
+      for (const folder of buildFolders) {
+        const buildPath = path.join(workspacePath, folder);
+        try {
+          await fs.access(buildPath);
+          console.log(`Deleting ${folder} folder...`);
+          // Use system command for build folders as they can have locked files
+          if (process.platform === 'win32') {
+            await execAsync(`rmdir /s /q "${buildPath}"`);
+          } else {
+            await execAsync(`rm -rf "${buildPath}"`);
+          }
+          console.log(`${folder} folder deleted`);
+        } catch (e) {
+          // Build folder doesn't exist or already deleted
+        }
+      }
+      
+      // Now remove the entire project folder
       await fs.rm(workspacePath, { 
         recursive: true, 
         force: true,
-        maxRetries: 3,
-        retryDelay: 100
+        maxRetries: 5,
+        retryDelay: 500
       });
       
       console.log('Workspace folder deleted successfully');
@@ -79,7 +100,8 @@ export async function POST(request: NextRequest) {
         if (process.platform === 'win32') {
           await execAsync(`rmdir /s /q "${workspacePath}"`);
         } else {
-          await execAsync(`rm -rf "${workspacePath}"`);
+          // Use more aggressive removal for Unix systems
+          await execAsync(`rm -rf "${workspacePath}" 2>/dev/null || true`);
         }
         console.log('Workspace folder deleted using system command');
       } catch (cmdError) {
@@ -159,7 +181,30 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 5. Clear any active agent executions
+    // 5. Clear GitHub PR information from tasks in Done status
+    // This prevents the "Updating Board" modal from appearing when re-entering the project
+    const clearedPRInfo = await prisma.task.updateMany({
+      where: {
+        projectId,
+        status: 'done',
+        OR: [
+          { githubPrNumber: { not: null } },
+          { githubState: { not: null } },
+          { githubPrId: { not: null } }
+        ]
+      },
+      data: {
+        githubPrNumber: null,
+        githubPrId: null,
+        githubState: null
+      }
+    });
+    
+    if (clearedPRInfo.count > 0) {
+      console.log(`Cleared GitHub PR information from ${clearedPRInfo.count} done tasks`);
+    }
+
+    // 6. Clear any active agent executions
     await prisma.agentExecution.updateMany({
       where: {
         task: {
@@ -179,6 +224,7 @@ export async function POST(request: NextRequest) {
       message: 'Session ended successfully',
       workspaceDeleted: true,
       tasksReset: tasksInProgress.length,
+      prInfoCleared: clearedPRInfo.count,
       sessionState: sessionState ? 'deleted' : 'no active session'
     });
 

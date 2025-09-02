@@ -1,7 +1,7 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { ArrowLeft, Plus, Loader2, RefreshCw, GitBranch, GitCommit, GitPullRequest, ExternalLink, PowerOff } from 'lucide-react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
@@ -41,6 +41,9 @@ interface ProjectData {
   gradient: string;
   columns: Column[];
   tasks: Task[];
+  githubOwner?: string;
+  githubRepo?: string;
+  githubRepoUrl?: string;
 }
 
 export default function ProjectBoard() {
@@ -69,6 +72,7 @@ export default function ProjectBoard() {
   const [commitMessage, setCommitMessage] = useState('');
   const [prCreated, setPrCreated] = useState(false);
   const [totalCommitsInSession, setTotalCommitsInSession] = useState(0);
+  const [isProcessingPRMerge, setIsProcessingPRMerge] = useState(false);
   
   // Phase 4: Modal states
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
@@ -136,18 +140,112 @@ export default function ProjectBoard() {
     }
   }, [params.projectId, status, router]);
 
-  // Poll for session state changes and PR status every 10 seconds
+  // State to track if we need to check for merge completion
+  const [checkingForMerge, setCheckingForMerge] = useState(false);
+  const [lastPRNumber, setLastPRNumber] = useState<number | null>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isCheckingRef = useRef(false); // Prevent concurrent checks
+  const prDetectedAtRef = useRef<Date | null>(null); // Track when PR was first detected
+
+  // Poll for session state changes and PR status
   useEffect(() => {
     if (!project?.id || isEndingSession) return;
 
+    // Clear any existing interval
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
     const checkStatus = async () => {
-      if (isEndingSession) return;
+      // Prevent concurrent checks
+      if (isCheckingRef.current || isEndingSession || isProcessingPRMerge) return;
       
-      // Fetch session state
-      await fetchSessionState();
+      // Skip if document is hidden (user is on another tab)
+      if (document.hidden) return;
       
-      // Check PR status if PR exists
-      if (sessionState?.prCreated && sessionState?.prNumber) {
+      isCheckingRef.current = true;
+      
+      try {
+      
+      // Fetch session state and use the returned value directly
+      const currentSessionState = await fetchSessionState();
+      
+      // Check PR status if PR exists (either in session, tasks in review, or recently moved to done)
+      const tasksWithPR = tasks.filter(t => t.githubPrNumber && t.githubPrNumber !== null && t.status === 'inReview');
+      const tasksJustMerged = tasks.filter(t => t.githubPrNumber && t.githubPrNumber !== null && t.status === 'done' && t.githubState === 'merged');
+      
+      // Enhanced debug logging for PR detection
+      const tasksInReview = tasks.filter(t => t.status === 'inReview');
+      const tasksInDoneWithMergedState = tasks.filter(t => t.status === 'done' && t.githubState === 'merged');
+      console.log('[PR Detection Debug]', {
+        tasksWithPR: tasksWithPR.length,
+        tasksJustMerged: tasksJustMerged.length,
+        tasksInDoneWithMergedState: tasksInDoneWithMergedState.length,
+        totalTasksInReview: tasksInReview.length,
+        taskPRNumbers: tasksWithPR.map(t => t.githubPrNumber),
+        mergedTasksPRNumbers: tasksJustMerged.map(t => ({ id: t.id, prNumber: t.githubPrNumber })),
+        lastPRNumber,
+        sessionPR: currentSessionState?.prNumber,
+        isProcessingPRMerge,
+        checkingForMerge,
+        prDetectedAt: prDetectedAtRef.current ? new Date().getTime() - prDetectedAtRef.current.getTime() : null
+      });
+      
+      // Check if we should look for PR status
+      // Check session state, PR created flag, tasks for PR info, and lastPRNumber
+      const hasPR = (currentSessionState?.prCreated && currentSessionState?.prNumber) || 
+                    currentSessionState?.prNumber || 
+                    tasksWithPR.length > 0 ||
+                    lastPRNumber !== null;
+      
+      // Track PR number from any source (prioritize lastPRNumber if set)
+      const currentPRNumber = lastPRNumber || currentSessionState?.prNumber || tasksWithPR[0]?.githubPrNumber || null;
+      
+      console.log('[PR Status Check]', {
+        hasPR,
+        currentPRNumber,
+        checkingForMerge,
+        willCheckStatus: hasPR || checkingForMerge
+      });
+      
+      // Track when PR is first detected
+      if (currentPRNumber && !prDetectedAtRef.current) {
+        prDetectedAtRef.current = new Date();
+        console.log('[PR Tracking] PR detected, will monitor for up to 30 minutes');
+      } else if (!currentPRNumber && !tasksJustMerged.length) {
+        // Only reset if there's no PR AND no recently merged tasks
+        if (prDetectedAtRef.current) {
+          console.log('[PR Tracking] PR tracking cleared - no active PR');
+        }
+        prDetectedAtRef.current = null;
+      }
+      
+      // Stop checking after 30 minutes of PR being open (user probably not actively merging)
+      if (prDetectedAtRef.current) {
+        const minutesElapsed = (Date.now() - prDetectedAtRef.current.getTime()) / 1000 / 60;
+        if (minutesElapsed > 30) {
+          console.log('[PR Tracking] PR has been open for 30+ minutes, reducing check frequency');
+          // Only check when tab becomes visible again
+          if (document.hidden) {
+            console.log('[PR Tracking] Tab hidden, skipping check');
+            return;
+          }
+        }
+      }
+      
+      // Detect when PR disappears (likely merged)
+      if (lastPRNumber && !currentPRNumber && !checkingForMerge) {
+        console.log('[PR Status] PR disappeared, checking if it was merged...');
+        setCheckingForMerge(true);
+      }
+      
+      setLastPRNumber(currentPRNumber);
+      
+      // Check PR status if we have one or are checking for merge
+      if (hasPR || checkingForMerge) {
+        console.log('[PR API Call] Initiating PR status check - hasPR:', hasPR, 'checkingForMerge:', checkingForMerge, 'currentPR:', currentPRNumber);
+        
         try {
           const response = await fetch('/api/workspace/check-pr-status', {
             method: 'POST',
@@ -157,38 +255,145 @@ export default function ProjectBoard() {
           
           if (response.ok) {
             const data = await response.json();
+            console.log('[PR API Response]', data);
             
-            if (data.prMerged && data.newSession) {
-              console.log('PR was merged, session has been reset');
+            // Log specific conditions for debugging
+            if (data.prExists) {
+              console.log(`PR #${data.prNumber} exists, state: ${data.prState}, merged: ${data.prMerged}`);
+            }
+            
+            if (data.prMerged && !isProcessingPRMerge && !data.alreadyProcessed) {
+              // PR was JUST merged (not already processed)
+              console.log('[PR Merged!] Updating UI and syncing repository...');
+              setIsProcessingPRMerge(true);
+              setCheckingForMerge(false);
               
-              // Add a small delay to ensure backend has finished updating
-              await new Promise(resolve => setTimeout(resolve, 500));
+              if (data.warning) {
+                console.log('[PR Merge Warning]', data.warning);
+                toast.warning('PR was merged but had some issues. Updating board...');
+              } else {
+                toast.success('PR merged! Moving tasks to Done...');
+              }
               
-              // Refresh project data to get updated tasks and session
+              // Sync git repository and refresh data
+              setTimeout(async () => {
+                try {
+                  // Sync the git repository to get latest changes
+                  const syncResponse = await fetch('/api/workspace/sync-git', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectId: project.id })
+                  });
+                  
+                  if (syncResponse.ok) {
+                    const syncData = await syncResponse.json();
+                    console.log('Git sync result:', syncData);
+                  }
+                } catch (syncError) {
+                  console.error('Error syncing git:', syncError);
+                }
+                
+                // Refresh project and session data
+                await fetchProject();
+                await fetchSessionState();
+                setIsProcessingPRMerge(false);
+                
+                // Clear PR tracking since merge is complete
+                prDetectedAtRef.current = null;
+                setLastPRNumber(null);
+                
+                toast.success('Board updated successfully!');
+                console.log('PR merge handled, returning to normal polling');
+              }, 2000);
+              
+              return; // Exit early to prevent further processing
+            } else if (data.alreadyProcessed) {
+              // PR was already processed in a previous session
+              console.log('PR already processed, no action needed');
+              setCheckingForMerge(false);
+              setIsProcessingPRMerge(false);
+              // Clear any PR tracking since it's already done
+              prDetectedAtRef.current = null;
+              setLastPRNumber(null);
+              // Don't refresh or sync - just continue normal operation
+            } else if (!data.prExists && checkingForMerge) {
+              // We were checking for merge but PR no longer exists
+              console.log('PR no longer exists after checking for merge');
+              setCheckingForMerge(false);
+              
+              // Just refresh the data to ensure sync
               await fetchProject();
               await fetchSessionState();
-              
-              // Show notification
-              toast.success('PR merged! Session reset with new branch. Ready for new work.');
-            } else if (data.prMerged && data.alreadyProcessed) {
-              // PR was already processed, just refresh session state
-              await fetchSessionState();
+            } else if (data.prExists && !data.prMerged) {
+              // PR exists but not merged yet
+              console.log(`PR #${data.prNumber} exists but not merged yet`);
+            } else {
+              // No special condition, reset checking flag if set
+              if (checkingForMerge && !data.prExists) {
+                setCheckingForMerge(false);
+              }
             }
+          } else if (response.status === 500) {
+            // Server error - don't crash the UI, just log it
+            console.error('Server error checking PR status, will retry next poll');
+            // Don't throw or redirect, just continue
           }
         } catch (error) {
-          console.error('Error checking PR status:', error);
+          console.error('[PR Error] Error checking PR status:', error);
+          // Don't throw or redirect, just log and continue
         }
+      } else {
+        console.log('[PR Check Skipped] No PR to check - hasPR:', hasPR, 'checkingForMerge:', checkingForMerge);
+      }
+      
+      // After PR check, handle merged tasks if they exist
+      if (tasksJustMerged.length > 0 && !isProcessingPRMerge && !checkingForMerge) {
+        console.log('[Merge Detection] Found merged tasks in done column, updating UI...');
+        setIsProcessingPRMerge(true);
+        toast.success('PR merged! Tasks moved to Done.');
+        
+        // Refresh the data to show updated state
+        setTimeout(async () => {
+          await fetchProject();
+          await fetchSessionState();
+          setIsProcessingPRMerge(false);
+          setCheckingForMerge(false);
+          // Clear PR tracking since merge is complete
+          prDetectedAtRef.current = null;
+          setLastPRNumber(null);
+          console.log('[Merge Complete] Regular polling resumed');
+        }, 1000);
+      }
+      
+      } finally {
+        isCheckingRef.current = false;
       }
     };
 
     // Initial check
     checkStatus();
     
-    // Set up interval
-    const interval = setInterval(checkStatus, 10000); // Poll every 10 seconds
+    // Set up interval with fixed timing (5 seconds)
+    intervalRef.current = setInterval(checkStatus, 5000);
+    
+    // Check immediately when tab becomes visible again
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        console.log('Tab became visible, checking for updates...');
+        checkStatus();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    return () => clearInterval(interval);
-  }, [project?.id, isEndingSession, sessionState?.prCreated, sessionState?.prNumber]);
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [project?.id, isEndingSession]); // Only re-run when project changes or session ends
 
   const initializeProject = async () => {
     try {
@@ -287,6 +492,17 @@ export default function ProjectBoard() {
       setTasks(data.tasks || []);
       if (data.columns && data.columns.length > 0) {
         setSelectedColumnId(data.columns[0].id);
+      }
+      
+      // Check if any tasks have PR numbers and update tracking
+      const tasksWithPR = (data.tasks || []).filter((t: Task) => t.githubPrNumber && t.status === 'inReview');
+      if (tasksWithPR.length > 0 && !lastPRNumber) {
+        const prNumber = tasksWithPR[0].githubPrNumber;
+        console.log(`[fetchProject] Detected PR #${prNumber} from tasks`);
+        setLastPRNumber(prNumber);
+        if (!prDetectedAtRef.current) {
+          prDetectedAtRef.current = new Date();
+        }
       }
     } catch (error) {
       console.error('Error fetching project:', error);
@@ -647,14 +863,26 @@ export default function ProjectBoard() {
         })
       });
       
-      if (response.ok) {
-        const data = await response.json();
+      const data = await response.json();
+      
+      // Check if PR was actually created (even if there were task update errors)
+      if (response.ok || (data.success && data.pullRequest)) {
         setPrCreated(true);
-        // Refresh session state to get updated PR info
+        
+        // Start monitoring for PR immediately
+        if (data.pullRequest?.number) {
+          setLastPRNumber(data.pullRequest.number);
+          prDetectedAtRef.current = new Date();
+          console.log(`PR #${data.pullRequest.number} created, starting monitoring`);
+        }
+        
+        // Refresh both session state AND project data to get updated task PR info
         await fetchSessionState();
+        await fetchProject(); // This will reload tasks with their updated githubPrNumber
         
         // Open PR URL in new tab
         if (data.pullRequest?.url) {
+          console.log('Opening PR URL:', data.pullRequest.url);
           window.open(data.pullRequest.url, '_blank');
         }
         
@@ -663,8 +891,8 @@ export default function ProjectBoard() {
         // Don't auto-move tasks to done - wait for PR merge
         // Tasks stay in review until PR is actually merged
       } else {
-        const error = await response.json();
-        toast.error(`Failed to create PR: ${error.message || 'Unknown error'}`);
+        // Only show error if PR creation truly failed
+        toast.error(`Failed to create PR: ${data.error || data.message || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('PR creation error:', error);
@@ -784,6 +1012,10 @@ export default function ProjectBoard() {
   
   // Phase 4: Determine PR button state
   const getPRButtonState = () => {
+    // First check if any task has a PR number (persistent across sessions)
+    const tasksWithPR = tasks.filter(t => t.githubPrNumber && t.status === 'inReview');
+    const hasPR = tasksWithPR.length > 0 || sessionState?.prCreated;
+    
     // Check if PR was merged (session would be reset)
     if (sessionState?.prMerged) {
       // This shouldn't happen as session is reset, but handle it anyway
@@ -799,7 +1031,7 @@ export default function ProjectBoard() {
       };
     }
     
-    if (!sessionState?.prCreated) {
+    if (!hasPR) {
       return {
         text: 'Create PR',
         action: handleCreatePR,
@@ -813,7 +1045,7 @@ export default function ProjectBoard() {
     }
     
     // PR exists - check if there are new commits
-    const hasNewCommits = sessionState.lastCommitAt > sessionState.prCreatedAt;
+    const hasNewCommits = sessionState?.lastCommitAt > sessionState?.prCreatedAt;
     
     if (hasNewCommits) {
       return {
@@ -827,11 +1059,18 @@ export default function ProjectBoard() {
     }
     
     // No new commits - just view PR
+    // Build PR URL from task info if sessionState doesn't have it
+    let prUrl = sessionState?.prUrl;
+    if (!prUrl && tasksWithPR.length > 0 && project) {
+      const taskWithPR = tasksWithPR[0];
+      prUrl = `https://github.com/${project.githubOwner}/${project.githubRepo}/pull/${taskWithPR.githubPrNumber}`;
+    }
+    
     return {
       text: 'View PR',
       action: () => {
-        if (sessionState?.prUrl) {
-          window.open(sessionState.prUrl, '_blank');
+        if (prUrl) {
+          window.open(prUrl, '_blank');
         }
       },
       disabled: false,
@@ -843,6 +1082,18 @@ export default function ProjectBoard() {
 
   return (
     <div className="min-h-screen bg-background">
+      {/* Loading overlay for PR merge processing */}
+      {isProcessingPRMerge && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-card border border-border rounded-lg p-6 flex flex-col items-center gap-4">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <div className="text-center">
+              <p className="font-semibold">Updating Board</p>
+              <p className="text-sm text-muted-foreground mt-1">Syncing changes and moving tasks to Done...</p>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="border-b border-border bg-card/50 backdrop-blur">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">

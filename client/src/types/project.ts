@@ -50,6 +50,13 @@ export interface Task {
   metadata?: TaskMetadata;
   agentEnabled?: boolean;
   agentType?: string;
+  // GitHub Integration fields
+  githubIssueNumber?: number;
+  githubPrNumber?: number;
+  githubBranch?: string;
+  githubIssueId?: string;
+  githubPrId?: string;
+  githubState?: string;
 }
 
 export interface TaskMetadata {

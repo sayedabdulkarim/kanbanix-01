@@ -137,7 +137,7 @@ model Task {
   githubPrNumber     Int?
   githubBranch       String?
   githubIssueId      String?   @unique
-  githubPrId         String?   @unique
+  githubPrId         String?   // Removed @unique - multiple tasks can share same PR
   githubState        String?   // open, closed, merged
   
   // Time tracking

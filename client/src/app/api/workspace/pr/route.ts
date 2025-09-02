@@ -160,8 +160,15 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Step 3: Update task with PR info and move to In Review
+      // Step 3: Update task(s) with PR info
+      // If a specific task is provided, update only that task
+      // Otherwise, update ALL tasks in review status (they were committed together)
+      console.log(`[PR Creation] Updating tasks with PR #${pr.number}`);
+      
       if (task) {
+        // Single task update (legacy behavior)
+        console.log(`[PR Creation] Updating single task ${taskId} with PR #${pr.number}`);
+        
         // Find the "In Review" column for this project
         const inReviewColumn = await prisma.column.findFirst({
           where: {
@@ -203,8 +210,89 @@ export async function POST(request: NextRequest) {
             })
           }
         });
+      } else {
+        // No specific task - update ALL tasks in review status
+        // This handles the case where multiple tasks were committed together
+        const tasksInReview = await prisma.task.findMany({
+          where: {
+            projectId,
+            status: 'inReview'
+          }
+        });
+        
+        console.log(`[PR Creation] Found ${tasksInReview.length} tasks in review to associate with PR #${pr.number}`);
+        
+        if (tasksInReview.length > 0) {
+          try {
+            // Update all tasks in review with the PR info
+            // Use individual updates to avoid unique constraint issues with legacy data
+            let updateCount = 0;
+            let failedUpdates = 0;
+            
+            for (const task of tasksInReview) {
+              try {
+                await prisma.task.update({
+                  where: { id: task.id },
+                  data: {
+                    githubPrNumber: pr.number,
+                    githubPrId: pr.node_id,
+                    githubState: pr.state
+                  }
+                });
+                updateCount++;
+                
+                // Log activity for this task
+                await prisma.activity.create({
+                  data: {
+                    taskId: task.id,
+                    userId: session.user.id,
+                    type: 'pr_created',
+                    description: `Created PR #${pr.number}: ${pr.title}`,
+                    metadata: JSON.stringify({
+                      projectId,
+                      action: 'pr_created',
+                      prNumber: pr.number,
+                      prUrl: pr.html_url,
+                      branch: branchInfo.current,
+                    })
+                  }
+                }).catch(err => {
+                  console.log(`[PR Creation] Failed to log activity for task ${task.id}:`, err.message);
+                });
+              } catch (updateError: any) {
+                console.log(`[PR Creation] Failed to update task ${task.id}:`, updateError.message);
+                failedUpdates++;
+                // Continue with other tasks even if one fails
+              }
+            }
+            
+            console.log(`[PR Creation] Successfully updated ${updateCount}/${tasksInReview.length} tasks with PR #${pr.number}`);
+            if (failedUpdates > 0) {
+              console.log(`[PR Creation] Warning: ${failedUpdates} task updates failed (possibly due to legacy unique constraints)`);
+            }
+          } catch (error: any) {
+            console.error('[PR Creation] Error updating tasks with PR info:', error);
+            // Don't fail the entire PR creation - the PR was already created successfully
+            console.log('[PR Creation] Continuing despite task update errors - PR was created successfully');
+          }
+        } else {
+          console.log('[PR Creation] Warning: No tasks in review status to associate with PR');
+        }
       }
 
+      // Update session state with PR information
+      await prisma.sessionState.update({
+        where: { id: sessionState.id },
+        data: {
+          prNumber: pr.number,
+          prUrl: pr.html_url,
+          prTitle: pr.title,
+          prCreated: true
+        }
+      });
+      console.log(`[PR Creation] Updated session state with PR #${pr.number}`);
+
+      // Always return success if PR was created, even if task updates had issues
       return NextResponse.json({
         success: true,
         pullRequest: {
@@ -213,11 +301,12 @@ export async function POST(request: NextRequest) {
           state: pr.state,
           title: pr.title,
           branch: branchInfo.current,
-        }
+        },
+        message: 'Pull request created successfully'
       });
 
     } catch (prError: any) {
-      console.error('PR creation error:', prError);
+      console.error('[PR Creation] GitHub API error:', prError);
       
       // Check if PR already exists
       if (prError.status === 422 && prError.message.includes('pull request already exists')) {
@@ -255,7 +344,7 @@ export async function POST(request: NextRequest) {
     }
 
   } catch (error: any) {
-    console.error('PR creation error:', error);
+    console.error('[PR Creation] Unexpected error:', error);
     return NextResponse.json({
       error: 'Failed to create pull request',
       details: error.message
