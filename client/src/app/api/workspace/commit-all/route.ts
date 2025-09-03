@@ -41,7 +41,48 @@ export async function POST(request: NextRequest) {
         );
       }
       
-      // Stage all changes
+      // Capture diffs for all tasks BEFORE staging (while changes are still unstaged)
+      console.log('=== CAPTURING DIFFS FOR COMMITTED TASKS ===');
+      const { default: diffTrackingService } = await import('@/lib/services/diffTrackingService');
+      
+      for (const taskId of taskIds) {
+        try {
+          const task = await prisma.task.findUnique({
+            where: { id: taskId },
+            select: { id: true, title: true, diffs: true }
+          });
+          
+          if (task) {
+            console.log(`Capturing diffs for task: ${task.title}`);
+            const taskDiff = await diffTrackingService.captureTaskDiffs(
+              workspacePath,
+              taskId,
+              task.title || 'Untitled Task',
+              'initial'
+            );
+            
+            if (taskDiff) {
+              const existingDiffs = task.diffs ? JSON.parse(task.diffs as string) : [];
+              const allDiffs = [...existingDiffs, taskDiff];
+              
+              // Store diffs immediately
+              await prisma.task.update({
+                where: { id: taskId },
+                data: {
+                  diffs: JSON.stringify(allDiffs)
+                }
+              });
+              
+              console.log(`Stored ${taskDiff.files.length} file diffs for task ${taskId}`);
+            }
+          }
+        } catch (error) {
+          console.error(`Error capturing diffs for task ${taskId}:`, error);
+          // Don't fail the commit if diff capture fails
+        }
+      }
+      
+      // Now stage all changes after capturing diffs
       await execAsync('git add -A', { cwd: workspacePath });
       
       // Commit with the provided message
@@ -75,6 +116,22 @@ export async function POST(request: NextRequest) {
             })
           )
         );
+      }
+      
+      // Update tasks with commit SHA (diffs were already captured before staging)
+      if (commitHash && taskIds.length > 0) {
+        for (const taskId of taskIds) {
+          try {
+            await prisma.task.update({
+              where: { id: taskId },
+              data: {
+                commitSha: commitHash
+              }
+            });
+          } catch (error) {
+            console.error(`Error updating task ${taskId} with commit SHA:`, error);
+          }
+        }
       }
       
       // Update SessionState with commit information

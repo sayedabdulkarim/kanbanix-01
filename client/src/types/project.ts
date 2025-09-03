@@ -57,6 +57,10 @@ export interface Task {
   githubIssueId?: string;
   githubPrId?: string;
   githubState?: string;
+  // Git Integration fields (from DB)
+  commitSha?: string;
+  diffs?: string; // JSON string of TaskDiff[]
+  affectedByTasks?: string; // Comma-separated task IDs
 }
 
 export interface TaskMetadata {
@@ -85,6 +89,27 @@ export interface DiffEntry {
   deletions: number;
   changes: string;
   timestamp: Date;
+}
+
+export interface TaskDiff {
+  id: string;
+  version: number;
+  type: 'initial' | 'follow-up' | 'chat-update';
+  files: FileDiff[];
+  timestamp: Date;
+  message?: string; // Commit message or follow-up description
+  author?: string;
+  totalAdditions: number;
+  totalDeletions: number;
+}
+
+export interface FileDiff {
+  fileName: string;
+  filePath: string;
+  additions: number;
+  deletions: number;
+  changes: string; // The actual diff content
+  status: 'added' | 'modified' | 'deleted';
 }
 
 export interface Comment {

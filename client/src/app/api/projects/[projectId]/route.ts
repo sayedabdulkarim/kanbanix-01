@@ -122,6 +122,10 @@ export async function GET(
           userName: activity.user.name,
           createdAt: activity.createdAt,
         })),
+        // Include diff-related fields
+        diffs: task.diffs,
+        commitSha: task.commitSha,
+        affectedByTasks: task.affectedByTasks,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,
       })),

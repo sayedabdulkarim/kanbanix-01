@@ -4,6 +4,8 @@ import { authOptions } from '../../auth/[...nextauth]/route';
 import { PrismaClient } from '@prisma/client';
 import path from 'path';
 import gitService from '@/lib/services/gitService';
+import diffTrackingService from '@/lib/services/diffTrackingService';
+import { TaskDiff } from '@/types/project';
 
 const prisma = new PrismaClient();
 
@@ -52,6 +54,32 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
     
+    // Capture diffs before committing (if taskId provided)
+    let taskDiffs: TaskDiff[] = [];
+    if (taskId) {
+      // Get the task to fetch title
+      const task = await prisma.task.findUnique({
+        where: { id: taskId },
+        select: { title: true, diffs: true }
+      });
+      
+      if (task) {
+        // Capture current diffs
+        const newDiff = await diffTrackingService.captureTaskDiffs(
+          workspacePath,
+          taskId,
+          task.title || 'Untitled Task',
+          'initial'
+        );
+        
+        if (newDiff) {
+          // Get existing diffs if any
+          const existingDiffs = task.diffs ? JSON.parse(task.diffs) : [];
+          taskDiffs = [...existingDiffs, newDiff];
+        }
+      }
+    }
+    
     // Commit changes
     const commitInfo = await gitService.commitChanges(
       workspacePath,
@@ -77,16 +105,25 @@ export async function POST(request: NextRequest) {
         }
       });
       
-      // Update task with branch info if not already set
+      // Update task with branch info, commit SHA, and diffs
       const branchInfo = await gitService.getBranchInfo(workspacePath);
+      const updateData: any = {
+        commitSha: commitInfo.hash,
+      };
+      
       if (branchInfo.current && branchInfo.current !== 'main' && branchInfo.current !== 'master') {
-        await prisma.task.update({
-          where: { id: taskId },
-          data: {
-            githubBranch: branchInfo.current
-          }
-        });
+        updateData.githubBranch = branchInfo.current;
       }
+      
+      // Store the captured diffs
+      if (taskDiffs.length > 0) {
+        updateData.diffs = JSON.stringify(taskDiffs);
+      }
+      
+      await prisma.task.update({
+        where: { id: taskId },
+        data: updateData
+      });
     }
     
     return NextResponse.json({

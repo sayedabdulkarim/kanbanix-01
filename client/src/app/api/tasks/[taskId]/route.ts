@@ -4,6 +4,8 @@ import { PrismaClient } from '@prisma/client';
 import { Octokit } from '@octokit/rest';
 import { authOptions } from '../../auth/[...nextauth]/route';
 import path from 'path';
+import diffTrackingService from '@/lib/services/diffTrackingService';
+import gitService from '@/lib/services/gitService';
 
 const prisma = new PrismaClient({
   datasources: {
@@ -224,6 +226,75 @@ export async function PUT(
           },
         });
       }
+    }
+
+    // Auto-capture diffs when task moves to inReview or done (for direct commits)
+    if ((filteredUpdates.status === 'inReview' && existingTask.status !== 'inReview') ||
+        (filteredUpdates.status === 'done' && existingTask.status !== 'done')) {
+      
+      console.log(`=== AUTO-CAPTURING DIFFS FOR ${filteredUpdates.status.toUpperCase()} ===`);
+      console.log('Task:', updatedTask.title);
+      
+      try {
+        // Get project details for workspace path
+        const project = await prisma.project.findUnique({
+          where: { id: existingTask.projectId },
+          select: { id: true }
+        });
+        
+        if (project) {
+          const WORKSPACE_CONFIG = {
+            basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), 'projects'),
+          };
+          const workspacePath = path.join(WORKSPACE_CONFIG.basePath, project.id);
+          
+          // Check if there are uncommitted changes
+          const uncommittedChanges = await gitService.getUncommittedChanges(workspacePath);
+          
+          if (uncommittedChanges.length > 0) {
+            // Capture diffs for this task
+            const taskDiff = await diffTrackingService.captureTaskDiffs(
+              workspacePath,
+              taskId,
+              updatedTask.title || 'Untitled Task',
+              'initial'
+            );
+            
+            if (taskDiff) {
+              // Get existing diffs if any
+              const existingDiffs = existingTask.diffs ? JSON.parse(existingTask.diffs as string) : [];
+              const allDiffs = [...existingDiffs, taskDiff];
+              
+              // Store diffs in database
+              await prisma.task.update({
+                where: { id: taskId },
+                data: {
+                  diffs: JSON.stringify(allDiffs)
+                }
+              });
+              
+              console.log(`Captured and stored ${taskDiff.files.length} file diffs for task ${taskId}`);
+              
+              // Log activity
+              await prisma.activity.create({
+                data: {
+                  type: 'diff_captured',
+                  description: `Changes captured: ${taskDiff.files.length} file(s) modified`,
+                  taskId: taskId,
+                  userId: session.user.id,
+                }
+              });
+            }
+          } else {
+            console.log('No uncommitted changes to capture');
+          }
+        }
+      } catch (error) {
+        console.error('Error capturing diffs for inReview task:', error);
+        // Don't fail the status update if diff capture fails
+      }
+      
+      console.log('========================');
     }
 
     // AI Agent Auto-Trigger: Check if status changed to "inProgress"

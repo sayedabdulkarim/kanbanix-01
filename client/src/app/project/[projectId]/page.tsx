@@ -33,6 +33,7 @@ import TaskModal from '@/components/kanban/TaskModal';
 import TaskDetailsSplitView from '@/components/kanban/TaskDetailsSplitView';
 import TaskExecutionPanel from '@/components/kanban/TaskExecutionPanel';
 import CommitModal from '@/components/modals/CommitModal';
+import UncommittedChangesModal from '@/components/modals/UncommittedChangesModal';
 
 interface ProjectData {
   id: string;
@@ -77,6 +78,8 @@ export default function ProjectBoard() {
   // Phase 4: Modal states
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
   const [isEndingSession, setIsEndingSession] = useState(false);
+  const [showUncommittedModal, setShowUncommittedModal] = useState(false);
+  const [uncommittedTasks, setUncommittedTasks] = useState<Task[]>([]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -932,21 +935,47 @@ export default function ProjectBoard() {
 
   // Handle End Session - cleanup and return to home
   const handleEndSession = async () => {
+    // Check for tasks in progress that will lose their work
+    try {
+      // Only check for tasks in progress (not done or inReview, as they're safe)
+      const tasksInProgress = tasks.filter(task => task.status === 'inProgress');
+      
+      // Check if there are tasks with saved diffs (these will preserve the workspace)
+      const tasksWithSavedDiffs = tasks.filter(task => 
+        (task.status === 'inReview' || task.status === 'done') && task.diffs
+      );
+      
+      // If there are tasks in progress, show warning modal
+      if (tasksInProgress.length > 0) {
+        setShowUncommittedModal(true);
+        setUncommittedTasks(tasksInProgress);
+        setHasUncommittedChanges(true); // In progress tasks always have potential changes
+        return;
+      }
+    } catch (error) {
+      console.error('Error checking tasks in progress:', error);
+    }
+    
+    // If no uncommitted changes, proceed with normal confirmation
     const confirmed = confirm(
       'End this session?\n\n' +
       '• Any running dev servers will be stopped\n' +
-      '• The workspace will be deleted\n' +
-      '• Tasks in progress will be reset to TODO\n' +
+      '• Tasks in "Done" and "In Review" will keep their saved changes\n' +
       '• You will be redirected to the home page\n\n' +
       'This ensures a fresh start next time you open this project.'
     );
     
     if (!confirmed) return;
     
+    await proceedWithEndSession();
+  };
+  
+  const proceedWithEndSession = async () => {
     try {
       // Set flag to stop all polling and workspace operations
       setIsEndingSession(true);
       setWorkspaceLoading(true);
+      setShowUncommittedModal(false);
       
       // First, redirect to prevent any further workspace operations
       // This prevents re-cloning while the cleanup is happening
@@ -1363,6 +1392,15 @@ export default function ProjectBoard() {
         tasksToCommit={tasks.filter(t => t.status === 'inReview')}
         projectName={project?.name || ''}
         isLoading={isCommitting}
+      />
+      
+      {/* Uncommitted Changes Warning Modal */}
+      <UncommittedChangesModal
+        isOpen={showUncommittedModal}
+        onClose={() => setShowUncommittedModal(false)}
+        onConfirm={proceedWithEndSession}
+        uncommittedTasks={uncommittedTasks}
+        hasUncommittedChanges={hasUncommittedChanges}
       />
     </div>
   );

@@ -140,6 +140,11 @@ model Task {
   githubPrId         String?   // Removed @unique - multiple tasks can share same PR
   githubState        String?   // open, closed, merged
   
+  // Git Integration
+  commitSha          String?   // Git commit SHA for this task's changes
+  diffs              String?   // Store task-specific diffs as JSON string
+  affectedByTasks    String?   // Track which other tasks' follow-ups affected this task (comma-separated)
+  
   // Time tracking
   startedAt          DateTime?
   completedAt        DateTime?

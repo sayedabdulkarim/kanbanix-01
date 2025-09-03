@@ -54,64 +54,107 @@ export async function POST(request: NextRequest) {
       console.error('Error stopping dev server:', error);
     }
 
-    // 2. Delete the cloned repository folder to ensure fresh start next time
-    const workspacePath = path.join(process.cwd(), 'projects', projectId);
-    
-    // Also clean up any client-side build artifacts
-    const clientProjectPath = path.join(process.cwd(), 'client', 'projects', projectId);
-    
-    // Clean main workspace
-    try {
-      await fs.access(workspacePath);
-      console.log(`Deleting workspace folder: ${workspacePath}`);
+    // 2. Check if we should preserve the workspace (for tasks with saved diffs)
+    const tasksWithDiffs = await prisma.task.findMany({
+      where: {
+        projectId,
+        OR: [
+          {
+            status: 'inReview',
+            diffs: { not: null }
+          },
+          {
+            status: 'done',
+            diffs: { not: null }
+          }
+        ]
+      }
+    });
+
+    const shouldPreserveWorkspace = tasksWithDiffs.length > 0;
+    let workspaceDeleted = false;
+
+    if (shouldPreserveWorkspace) {
+      console.log(`Preserving workspace - found ${tasksWithDiffs.length} tasks with saved diffs`);
       
-      // First try to delete common build/cache folders that might have locked files
+      // Only clean build artifacts, not the entire workspace
+      const workspacePath = path.join(process.cwd(), 'projects', projectId);
       const buildFolders = ['.next', 'dist', 'build', '.angular', '.nuxt', '.svelte-kit', 'node_modules/.cache'];
+      
       for (const folder of buildFolders) {
         const buildPath = path.join(workspacePath, folder);
         try {
           await fs.access(buildPath);
-          console.log(`Deleting ${folder} folder...`);
-          // Use system command for build folders as they can have locked files
+          console.log(`Cleaning ${folder} folder...`);
           if (process.platform === 'win32') {
             await execAsync(`rmdir /s /q "${buildPath}"`);
           } else {
             await execAsync(`rm -rf "${buildPath}"`);
           }
-          console.log(`${folder} folder deleted`);
+          console.log(`${folder} folder cleaned`);
         } catch (e) {
           // Build folder doesn't exist or already deleted
         }
       }
+    } else {
+      // No tasks with saved diffs - safe to delete the entire workspace
+      const workspacePath = path.join(process.cwd(), 'projects', projectId);
       
-      // Now remove the entire project folder
-      await fs.rm(workspacePath, { 
-        recursive: true, 
-        force: true,
-        maxRetries: 5,
-        retryDelay: 500
-      });
-      
-      console.log('Workspace folder deleted successfully');
-    } catch (error) {
-      console.error('Error deleting workspace folder:', error);
-      // Try using system command as fallback
+      // Clean main workspace
       try {
-        if (process.platform === 'win32') {
-          await execAsync(`rmdir /s /q "${workspacePath}"`);
-        } else {
-          // Use more aggressive removal for Unix systems
-          await execAsync(`rm -rf "${workspacePath}" 2>/dev/null || true`);
+        await fs.access(workspacePath);
+        console.log(`Deleting workspace folder: ${workspacePath}`);
+        
+        // First try to delete common build/cache folders that might have locked files
+        const buildFolders = ['.next', 'dist', 'build', '.angular', '.nuxt', '.svelte-kit', 'node_modules/.cache'];
+        for (const folder of buildFolders) {
+          const buildPath = path.join(workspacePath, folder);
+          try {
+            await fs.access(buildPath);
+            console.log(`Deleting ${folder} folder...`);
+            // Use system command for build folders as they can have locked files
+            if (process.platform === 'win32') {
+              await execAsync(`rmdir /s /q "${buildPath}"`);
+            } else {
+              await execAsync(`rm -rf "${buildPath}"`);
+            }
+            console.log(`${folder} folder deleted`);
+          } catch (e) {
+            // Build folder doesn't exist or already deleted
+          }
         }
-        console.log('Workspace folder deleted using system command');
-      } catch (cmdError) {
-        console.error('Failed to delete workspace folder even with system command:', cmdError);
+        
+        // Now remove the entire project folder
+        await fs.rm(workspacePath, { 
+          recursive: true, 
+          force: true,
+          maxRetries: 5,
+          retryDelay: 500
+        });
+        
+        console.log('Workspace folder deleted successfully');
+        workspaceDeleted = true;
+      } catch (error) {
+        console.error('Error deleting workspace folder:', error);
+        // Try using system command as fallback
+        try {
+          if (process.platform === 'win32') {
+            await execAsync(`rmdir /s /q "${workspacePath}"`);
+          } else {
+            // Use more aggressive removal for Unix systems
+            await execAsync(`rm -rf "${workspacePath}" 2>/dev/null || true`);
+          }
+          console.log('Workspace folder deleted using system command');
+          workspaceDeleted = true;
+        } catch (cmdError) {
+          console.error('Failed to delete workspace folder even with system command:', cmdError);
+        }
       }
-    }
-    
-    // Clean client project path (including .next cache)
-    try {
-      await fs.access(clientProjectPath);
+      
+      // Clean client project path (including .next cache)
+      const clientProjectPath = path.join(process.cwd(), 'client', 'projects', projectId);
+      try {
+        await fs.access(clientProjectPath);
       console.log(`Deleting client project folder: ${clientProjectPath}`);
       
       // Force remove including .next cache
@@ -122,9 +165,10 @@ export async function POST(request: NextRequest) {
         await execAsync(`rm -rf "${clientProjectPath}"`);
       }
       
-      console.log('Client project folder deleted successfully');
-    } catch (error) {
-      console.log('No client project folder to clean or already deleted');
+        console.log('Client project folder deleted successfully');
+      } catch (error) {
+        console.log('No client project folder to clean or already deleted');
+      }
     }
 
     // 3. Delete active SessionState (instead of marking inactive to avoid unique constraint issues)
@@ -222,7 +266,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: 'Session ended successfully',
-      workspaceDeleted: true,
+      workspaceDeleted: workspaceDeleted,
+      workspacePreserved: shouldPreserveWorkspace,
+      tasksWithSavedDiffs: tasksWithDiffs.length,
       tasksReset: tasksInProgress.length,
       prInfoCleared: clearedPRInfo.count,
       sessionState: sessionState ? 'deleted' : 'no active session'
