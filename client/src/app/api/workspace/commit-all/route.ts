@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
       
       // Capture diffs for all tasks BEFORE staging (while changes are still unstaged)
       console.log('=== CAPTURING DIFFS FOR COMMITTED TASKS ===');
-      const { default: diffTrackingService } = await import('@/lib/services/diffTrackingService');
+      const { default: diffTrackingService } = await import('@/lib/services/diffTrackingService.server');
       
       for (const taskId of taskIds) {
         try {

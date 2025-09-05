@@ -46,6 +46,7 @@ export async function GET(request: NextRequest) {
     // Check current git status for uncommitted changes
     const workspacePath = getWorkspacePath(projectId);
     let hasUncommittedChanges = false;
+    let actualCommitsAhead = 0;
     
     try {
       const { stdout } = await execAsync('git status --porcelain', { 
@@ -53,12 +54,57 @@ export async function GET(request: NextRequest) {
       });
       hasUncommittedChanges = stdout.trim().length > 0;
 
-      // Update if changed
-      if (hasUncommittedChanges !== sessionState.hasUncommittedChanges) {
-        await prisma.sessionState.update({
-          where: { id: sessionState.id },
-          data: { hasUncommittedChanges }
-        });
+      // Check how many commits ahead of origin/main we are
+      try {
+        // First fetch from origin to ensure we have latest remote state
+        try {
+          await execAsync('git fetch origin', { cwd: workspacePath });
+        } catch (fetchError) {
+          console.log('Could not fetch from origin:', fetchError);
+        }
+        
+        // Try to count commits ahead of origin/main
+        try {
+          const { stdout: aheadOutput } = await execAsync(
+            'git rev-list --count origin/main..HEAD',
+            { cwd: workspacePath }
+          );
+          actualCommitsAhead = parseInt(aheadOutput.trim()) || 0;
+        } catch (error) {
+          // If origin/main doesn't exist, count all commits in current branch
+          console.log('origin/main not found, counting all commits in branch');
+          try {
+            const { stdout: commitCount } = await execAsync(
+              'git rev-list --count HEAD',
+              { cwd: workspacePath }
+            );
+            const totalCommits = parseInt(commitCount.trim()) || 0;
+            // Subtract the initial commit to get actual work commits
+            actualCommitsAhead = Math.max(0, totalCommits - 1);
+          } catch (countError) {
+            console.log('Could not count commits:', countError);
+          }
+        }
+        
+        // If we have commits ahead but sessionState shows 0, update it
+        if (actualCommitsAhead > 0 && sessionState.totalCommitsInSession === 0) {
+          await prisma.sessionState.update({
+            where: { id: sessionState.id },
+            data: { 
+              totalCommitsInSession: actualCommitsAhead,
+              hasUncommittedChanges 
+            }
+          });
+          sessionState.totalCommitsInSession = actualCommitsAhead;
+        } else if (hasUncommittedChanges !== sessionState.hasUncommittedChanges) {
+          // Just update uncommitted changes if needed
+          await prisma.sessionState.update({
+            where: { id: sessionState.id },
+            data: { hasUncommittedChanges }
+          });
+        }
+      } catch (revListError) {
+        console.log('Error in commit counting logic:', revListError);
       }
     } catch (error) {
       console.error('Error checking git status:', error);
@@ -93,7 +139,7 @@ export async function GET(request: NextRequest) {
               : 'Ready to commit'
         },
         createPR: {
-          enabled: !hasUncommittedChanges && !sessionState.prCreated && sessionState.totalCommitsInSession > 0,
+          enabled: !hasUncommittedChanges && !sessionState.prCreated && (sessionState.totalCommitsInSession > 0 || actualCommitsAhead > 0),
           reason: hasUncommittedChanges 
             ? 'Uncommitted changes exist' 
             : sessionState.prCreated 

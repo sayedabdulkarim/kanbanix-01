@@ -243,6 +243,55 @@ export class AIAgentService {
       });
 
       if (execution && execution.task) {
+        // CRITICAL: Capture and store diffs IMMEDIATELY after execution completes
+        // This must happen BEFORE any git operations that might lose the changes
+        console.log('=== CAPTURING DIFFS AFTER AI EXECUTION ===');
+        console.log(`Task: ${execution.task.title} (${execution.task.id})`);
+        
+        try {
+          const workspacePath = path.join(process.cwd(), 'projects', execution.task.projectId);
+          
+          // Import diffTrackingService dynamically
+          const { default: diffTrackingService } = await import('@/lib/services/diffTrackingService.server');
+          
+          // Capture the diffs while files are still present
+          const taskDiff = await diffTrackingService.captureTaskDiffs(
+            workspacePath,
+            execution.task.id,
+            execution.task.title || 'AI Generated Task',
+            'initial' // This is the initial AI-generated code
+          );
+          
+          if (taskDiff && taskDiff.files.length > 0) {
+            // Store diffs in database immediately
+            const existingDiffs = execution.task.diffs ? JSON.parse(execution.task.diffs as string) : [];
+            const allDiffs = [...existingDiffs, taskDiff];
+            
+            await this.prisma.task.update({
+              where: { id: execution.task.id },
+              data: {
+                diffs: JSON.stringify(allDiffs)
+              }
+            });
+            
+            console.log(`✅ Stored ${taskDiff.files.length} file diffs for task ${execution.task.id}`);
+            await this.addExecutionLog(
+              executionId,
+              'info',
+              `📁 Captured and stored ${taskDiff.files.length} file changes`
+            );
+          } else {
+            console.warn(`⚠️ No diffs captured for task ${execution.task.id} - files may not have changed`);
+          }
+        } catch (error) {
+          console.error('Error capturing diffs after AI execution:', error);
+          await this.addExecutionLog(
+            executionId,
+            'warning',
+            `⚠️ Could not capture diffs: ${error.message}`
+          );
+          // Don't fail the execution, just log the error
+        }
         // Check if build validation passed (from result)
         const buildPassed = result.buildPassed !== false; // Default to true if not specified
         const buildStatus = result.buildValidation?.success ? 'passed' : 
@@ -255,28 +304,52 @@ export class AIAgentService {
         );
         
         if (inReviewColumn) {
-          await this.prisma.task.update({
-            where: { id: execution.task.id },
-            data: {
-              status: 'inReview',
-              column: {
-                connect: { id: inReviewColumn.id }
-              },
-              updatedAt: new Date()
+          try {
+            console.log(`Moving task ${execution.task.id} to InReview column ${inReviewColumn.id}`);
+            
+            const updatedTask = await this.prisma.task.update({
+              where: { id: execution.task.id },
+              data: {
+                status: 'inReview',
+                columnId: inReviewColumn.id,
+                updatedAt: new Date()
+              }
+            });
+            
+            console.log(`✅ Successfully updated task ${execution.task.id} to status: ${updatedTask.status}, columnId: ${updatedTask.columnId}`);
+            
+            await this.addExecutionLog(
+              executionId, 
+              'info', 
+              buildStatus === 'passed' ? 
+                '✅ Task moved to In Review column (build validation passed)' :
+              buildStatus === 'needs_attention' ?
+                `⚠️ Task moved to In Review column (build needs attention - ${result.buildValidation?.attempts} attempts)` :
+                '➡️ Task moved to In Review column'
+            );
+            
+            // Emit task update event to notify frontend of status change
+            if ((global as any).io) {
+              console.log(`Emitting task-updated event for project ${execution.task.projectId}`);
+              (global as any).io.to(`project-${execution.task.projectId}`).emit('task-updated', {
+                taskId: execution.task.id,
+                status: 'inReview',
+                columnId: inReviewColumn.id
+              });
             }
-          });
-          
-          await this.addExecutionLog(
-            executionId, 
-            'info', 
-            buildStatus === 'passed' ? 
-              '✅ Task moved to In Review column (build validation passed)' :
-            buildStatus === 'needs_attention' ?
-              `⚠️ Task moved to In Review column (build needs attention - ${result.buildValidation?.attempts} attempts)` :
-              '➡️ Task moved to In Review column'
-          );
+          } catch (error) {
+            console.error(`Failed to update task ${execution.task.id} to InReview:`, error);
+            await this.addExecutionLog(
+              executionId,
+              'error',
+              `❌ Failed to move task to In Review: ${error.message}`
+            );
+          }
         } else {
           // No inReview column found - log warning but don't fail
+          console.warn(`No InReview column found for project ${execution.task.projectId}`);
+          console.log('Available columns:', execution.task.project.columns.map(c => ({ id: c.id, name: c.name, status: c.status })));
+          
           await this.addExecutionLog(
             executionId,
             'warning',

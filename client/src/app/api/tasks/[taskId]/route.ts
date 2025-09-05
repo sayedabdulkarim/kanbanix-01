@@ -4,7 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import { Octokit } from '@octokit/rest';
 import { authOptions } from '../../auth/[...nextauth]/route';
 import path from 'path';
-import diffTrackingService from '@/lib/services/diffTrackingService';
+import diffTrackingService from '@/lib/services/diffTrackingService.server';
 import gitService from '@/lib/services/gitService';
 
 const prisma = new PrismaClient({

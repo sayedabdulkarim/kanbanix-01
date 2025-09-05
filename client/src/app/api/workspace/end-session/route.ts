@@ -54,7 +54,63 @@ export async function POST(request: NextRequest) {
       console.error('Error stopping dev server:', error);
     }
 
-    // 2. Check if we should preserve the workspace (for tasks with saved diffs)
+    // 2. Capture diffs for InReview tasks that don't have them yet
+    // This is critical to preserve work before any workspace operations
+    console.log('Checking for InReview tasks without saved diffs...');
+    const inReviewTasksWithoutDiffs = await prisma.task.findMany({
+      where: {
+        projectId,
+        status: 'inReview',
+        diffs: null
+      }
+    });
+
+    if (inReviewTasksWithoutDiffs.length > 0) {
+      console.log(`Found ${inReviewTasksWithoutDiffs.length} InReview tasks without diffs - capturing now...`);
+      const workspacePath = path.join(process.cwd(), 'projects', projectId);
+      
+      try {
+        // Import services needed for diff capture
+        const { default: diffTrackingService } = await import('@/lib/services/diffTrackingService.server');
+        const { default: gitService } = await import('@/lib/services/gitService');
+        
+        // Check if there are uncommitted changes to capture
+        const uncommittedChanges = await gitService.getUncommittedChanges(workspacePath);
+        
+        if (uncommittedChanges.length > 0) {
+          for (const task of inReviewTasksWithoutDiffs) {
+            try {
+              console.log(`Capturing diffs for InReview task: ${task.title}`);
+              const taskDiff = await diffTrackingService.captureTaskDiffs(
+                workspacePath,
+                task.id,
+                task.title || 'Untitled Task',
+                'initial'
+              );
+              
+              if (taskDiff && taskDiff.files.length > 0) {
+                // Store the captured diffs
+                await prisma.task.update({
+                  where: { id: task.id },
+                  data: {
+                    diffs: JSON.stringify([taskDiff])
+                  }
+                });
+                console.log(`✅ Captured and stored ${taskDiff.files.length} files for task ${task.id}`);
+              }
+            } catch (error) {
+              console.error(`Failed to capture diffs for task ${task.id}:`, error);
+              // Continue with other tasks even if one fails
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error capturing diffs for InReview tasks:', error);
+        // Continue with session end even if diff capture fails
+      }
+    }
+
+    // 3. Check if we should preserve the workspace (for tasks with saved diffs)
     const tasksWithDiffs = await prisma.task.findMany({
       where: {
         projectId,
@@ -77,9 +133,26 @@ export async function POST(request: NextRequest) {
     if (shouldPreserveWorkspace) {
       console.log(`Preserving workspace - found ${tasksWithDiffs.length} tasks with saved diffs`);
       
-      // Only clean build artifacts, not the entire workspace
+      // Only clean build artifacts and node_modules, not the entire workspace
       const workspacePath = path.join(process.cwd(), 'projects', projectId);
-      const buildFolders = ['.next', 'dist', 'build', '.angular', '.nuxt', '.svelte-kit', 'node_modules/.cache'];
+      
+      // Delete node_modules to save significant space
+      const nodeModulesPath = path.join(workspacePath, 'node_modules');
+      try {
+        await fs.access(nodeModulesPath);
+        console.log('Deleting node_modules to save storage space...');
+        if (process.platform === 'win32') {
+          await execAsync(`rmdir /s /q "${nodeModulesPath}"`);
+        } else {
+          await execAsync(`rm -rf "${nodeModulesPath}"`);
+        }
+        console.log('node_modules deleted successfully (will auto-reinstall when needed)');
+      } catch (e) {
+        console.log('No node_modules to delete or already removed');
+      }
+      
+      // Clean other build artifacts
+      const buildFolders = ['.next', 'dist', 'build', '.angular', '.nuxt', '.svelte-kit'];
       
       for (const folder of buildFolders) {
         const buildPath = path.join(workspacePath, folder);

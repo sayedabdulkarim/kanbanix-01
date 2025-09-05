@@ -1,5 +1,7 @@
 import { TaskDiff, FileDiff } from '@/types/project';
 import gitService from './gitService';
+import fs from 'fs/promises';
+import path from 'path';
 
 class DiffTrackingService {
   private currentTaskDiffs: Map<string, string[]> = new Map(); // taskId -> file paths being tracked
@@ -52,8 +54,17 @@ class DiffTrackingService {
         if (diff) {
           const stats = this.parseDiffStats(diff);
           
-          // Note: File content reading is handled in the server version
-          // Client-side doesn't have access to fs module
+          // Read the actual file content for new and modified files
+          let fileContent: string | undefined;
+          if (stats.status !== 'deleted') {
+            try {
+              const fullPath = path.join(workspacePath, filePath);
+              fileContent = await fs.readFile(fullPath, 'utf-8');
+              console.log(`[DiffTracking] Captured content for ${filePath}: ${fileContent.length} chars`);
+            } catch (error) {
+              console.warn(`[DiffTracking] Could not read file content for ${filePath}:`, error);
+            }
+          }
           
           fileDiffs.push({
             fileName: filePath.split('/').pop() || filePath,
@@ -61,8 +72,8 @@ class DiffTrackingService {
             additions: stats.additions,
             deletions: stats.deletions,
             changes: diff,
-            status: stats.status
-            // fileContent is only available in server version
+            status: stats.status,
+            fileContent // Store the actual file content
           });
           
           totalAdditions += stats.additions;
@@ -85,7 +96,7 @@ class DiffTrackingService {
         totalDeletions
       };
 
-      console.log(`[DiffTracking] Captured diff v${version} for task ${taskId}: +${totalAdditions} -${totalDeletions}`);
+      console.log(`[DiffTracking] Captured diff v${version} for task ${taskId}: +${totalAdditions} -${totalDeletions}, ${fileDiffs.length} files with content`);
       return taskDiff;
     } catch (error) {
       console.error(`[DiffTracking] Error capturing diffs for task ${taskId}:`, error);

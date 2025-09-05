@@ -110,6 +110,7 @@ export interface FileDiff {
   deletions: number;
   changes: string; // The actual diff content
   status: 'added' | 'modified' | 'deleted';
+  fileContent?: string; // Full file content for new/modified files (for persistence)
 }
 
 export interface Comment {

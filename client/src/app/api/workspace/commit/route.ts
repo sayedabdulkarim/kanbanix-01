@@ -4,7 +4,7 @@ import { authOptions } from '../../auth/[...nextauth]/route';
 import { PrismaClient } from '@prisma/client';
 import path from 'path';
 import gitService from '@/lib/services/gitService';
-import diffTrackingService from '@/lib/services/diffTrackingService';
+import diffTrackingService from '@/lib/services/diffTrackingService.server';
 import { TaskDiff } from '@/types/project';
 
 const prisma = new PrismaClient();

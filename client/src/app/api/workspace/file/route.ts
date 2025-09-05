@@ -58,22 +58,65 @@ export async function GET(request: NextRequest) {
     }
     
     // Check if file exists
+    let content: string;
+    let fromSavedDiff = false;
+    
     try {
       await fs.access(fullFilePath);
+      // File exists, read it
+      content = await fs.readFile(fullFilePath, 'utf-8');
     } catch {
-      return NextResponse.json({ 
-        error: 'File not found' 
-      }, { status: 404 });
+      // File doesn't exist, check if we have it in saved diffs
+      console.log(`File ${filePath} not found in workspace, checking saved diffs...`);
+      
+      // Find InReview tasks with saved diffs that might contain this file
+      const tasksWithDiffs = await prisma.task.findMany({
+        where: {
+          projectId,
+          status: 'inReview',
+          diffs: { not: null }
+        }
+      });
+      
+      let fileFound = false;
+      for (const task of tasksWithDiffs) {
+        if (fileFound) break;
+        
+        try {
+          const diffs = JSON.parse(task.diffs as string);
+          
+          for (const diff of diffs) {
+            if (diff.files && Array.isArray(diff.files)) {
+              for (const file of diff.files) {
+                if (file.filePath === filePath && file.fileContent) {
+                  content = file.fileContent;
+                  fromSavedDiff = true;
+                  fileFound = true;
+                  console.log(`Found file ${filePath} in saved diffs for task: ${task.title}`);
+                  break;
+                }
+              }
+            }
+            if (fileFound) break;
+          }
+        } catch (error) {
+          console.error(`Error parsing diffs for task ${task.id}:`, error);
+        }
+      }
+      
+      if (!fileFound) {
+        return NextResponse.json({ 
+          error: 'File not found in workspace or saved diffs' 
+        }, { status: 404 });
+      }
     }
-    
-    // Read file content
-    const content = await fs.readFile(fullFilePath, 'utf-8');
     
     return NextResponse.json({
       success: true,
       path: filePath,
       content,
-      size: content.length
+      size: content.length,
+      fromSavedDiff
     });
 
   } catch (error: any) {

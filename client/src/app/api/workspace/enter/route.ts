@@ -105,30 +105,97 @@ export async function POST(request: NextRequest) {
       }
 
       if (isValidRepo) {
-        // If it's a valid repo, pull latest changes
-        console.log('Valid git repo found, pulling latest changes');
-        try {
-          await execAsync('git fetch origin', { cwd: workspacePath });
-          await execAsync('git reset --hard origin/main', { cwd: workspacePath });
-          await execAsync('git clean -fd', { cwd: workspacePath });
+        // If it's a valid repo, check for InReview tasks with saved diffs BEFORE resetting
+        console.log('Valid git repo found, checking for saved diffs before pulling changes');
+        
+        // Check for InReview tasks with saved diffs
+        const inReviewTasks = await prisma.task.findMany({
+          where: {
+            projectId,
+            status: 'inReview',
+            diffs: { not: null }
+          }
+        });
 
-          // Release lock before returning
-          workspaceLocks.delete(projectId);
-
-          return NextResponse.json({
-            success: true,
-            workspacePath,
-            message: 'Workspace refreshed with latest changes',
-            project: {
-              id: project.id,
-              name: project.name,
-              githubOwner: project.githubOwner,
-              githubRepo: project.githubRepo
+        if (inReviewTasks.length > 0) {
+          console.log(`Found ${inReviewTasks.length} InReview tasks with saved diffs - preserving and restoring files`);
+          
+          // Don't do a hard reset if we have saved diffs to restore
+          try {
+            await execAsync('git fetch origin', { cwd: workspacePath });
+            
+            // Restore files from saved diffs
+            for (const task of inReviewTasks) {
+              try {
+                const diffs = JSON.parse(task.diffs as string);
+                console.log(`Restoring files for task: ${task.title}`);
+                
+                for (const diff of diffs) {
+                  if (diff.files && Array.isArray(diff.files)) {
+                    for (const file of diff.files) {
+                      if (file.fileContent && file.status !== 'deleted') {
+                        const filePath = path.join(workspacePath, file.filePath);
+                        try {
+                          const fileDir = path.dirname(filePath);
+                          await fs.mkdir(fileDir, { recursive: true });
+                          await fs.writeFile(filePath, file.fileContent, 'utf-8');
+                          console.log(`✅ Restored file: ${file.filePath}`);
+                        } catch (fileError) {
+                          console.error(`Failed to restore file ${file.filePath}:`, fileError);
+                        }
+                      }
+                    }
+                  }
+                }
+              } catch (diffError) {
+                console.error(`Error restoring diffs for task ${task.id}:`, diffError);
+              }
             }
-          });
-        } catch (pullError: any) {
-          console.log('Failed to pull latest changes, will re-clone:', pullError.message);
-          isValidRepo = false;
+            
+            // Release lock before returning
+            workspaceLocks.delete(projectId);
+
+            return NextResponse.json({
+              success: true,
+              workspacePath,
+              message: 'Workspace refreshed with saved files restored',
+              filesRestored: true,
+              project: {
+                id: project.id,
+                name: project.name,
+                githubOwner: project.githubOwner,
+                githubRepo: project.githubRepo
+              }
+            });
+          } catch (error) {
+            console.error('Error during fetch/restore:', error);
+            // Continue with normal flow
+          }
+        } else {
+          // No saved diffs, safe to do hard reset
+          try {
+            await execAsync('git fetch origin', { cwd: workspacePath });
+            await execAsync('git reset --hard origin/main', { cwd: workspacePath });
+            await execAsync('git clean -fd', { cwd: workspacePath });
+
+            // Release lock before returning
+            workspaceLocks.delete(projectId);
+
+            return NextResponse.json({
+              success: true,
+              workspacePath,
+              message: 'Workspace refreshed with latest changes',
+              project: {
+                id: project.id,
+                name: project.name,
+                githubOwner: project.githubOwner,
+                githubRepo: project.githubRepo
+              }
+            });
+          } catch (pullError: any) {
+            console.log('Failed to pull latest changes, will re-clone:', pullError.message);
+            isValidRepo = false;
+          }
         }
       }
 
@@ -348,6 +415,64 @@ export async function POST(request: NextRequest) {
 
     // Get current branch info
     const branchInfo = await gitService.getBranchInfo(workspacePath);
+
+    // RESTORE FILES FROM SAVED DIFFS FOR INREVIEW TASKS
+    try {
+      console.log('Checking for InReview tasks with saved diffs to restore...');
+      const inReviewTasks = await prisma.task.findMany({
+        where: {
+          projectId,
+          status: 'inReview',
+          diffs: { not: null }
+        }
+      });
+
+      if (inReviewTasks.length > 0) {
+        console.log(`Found ${inReviewTasks.length} InReview tasks with saved diffs`);
+        
+        for (const task of inReviewTasks) {
+          try {
+            const diffs = JSON.parse(task.diffs as string);
+            console.log(`Restoring files for task: ${task.title} (${diffs.length} diff versions)`);
+            
+            // Process each diff version (usually just one, but could have multiple)
+            for (const diff of diffs) {
+              if (diff.files && Array.isArray(diff.files)) {
+                for (const file of diff.files) {
+                  // Only restore files that have content and aren't deleted
+                  if (file.fileContent && file.status !== 'deleted') {
+                    const filePath = path.join(workspacePath, file.filePath);
+                    
+                    try {
+                      // Ensure directory exists
+                      const fileDir = path.dirname(filePath);
+                      await fs.mkdir(fileDir, { recursive: true });
+                      
+                      // Write file content
+                      await fs.writeFile(filePath, file.fileContent, 'utf-8');
+                      console.log(`✅ Restored file: ${file.filePath}`);
+                    } catch (fileError) {
+                      console.error(`Failed to restore file ${file.filePath}:`, fileError);
+                    }
+                  }
+                }
+              }
+            }
+            
+            console.log(`Restored files for task: ${task.title}`);
+          } catch (diffError) {
+            console.error(`Error restoring diffs for task ${task.id}:`, diffError);
+          }
+        }
+        
+        console.log('File restoration from saved diffs completed');
+      } else {
+        console.log('No InReview tasks with saved diffs found');
+      }
+    } catch (restoreError) {
+      console.error('Error restoring files from saved diffs:', restoreError);
+      // Don't fail the workspace enter if restoration fails
+    }
 
     // Check for existing PRs from tasks in this project
     let existingPR = null;

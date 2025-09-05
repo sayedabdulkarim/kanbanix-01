@@ -98,6 +98,74 @@ export default function TaskExecutionPanel({
         if (data.status === 'completed' && data.changes && data.changes.length > 0 && !devServerStarted) {
           console.log('Execution completed, should start dev server...');
           setShouldStartDevServer(true);
+          
+          // Fetch the updated task status from backend
+          // The backend should have moved it to InReview
+          if (onTaskUpdate && task) {
+            // Add a delay to ensure backend has updated the task
+            setTimeout(() => {
+              fetch(`/api/tasks/${task.id}`, {
+                cache: 'no-store',
+                headers: {
+                  'Cache-Control': 'no-cache'
+                }
+              })
+                .then(res => res.json())
+                .then(updatedTask => {
+                  console.log('Fetched updated task:', {
+                    id: updatedTask.id,
+                    status: updatedTask.status, 
+                    columnId: updatedTask.columnId
+                  });
+                  
+                  if (updatedTask && updatedTask.status === 'inReview') {
+                    console.log('Task moved to InReview, updating UI with columnId:', updatedTask.columnId);
+                    onTaskUpdate(updatedTask);
+                  } else if (updatedTask) {
+                    // If not yet InReview, retry with more attempts
+                    console.log(`Task status is ${updatedTask.status}, retrying...`);
+                    let retryCount = 0;
+                    const maxRetries = 3;
+                    
+                    const retryFetch = () => {
+                      if (retryCount >= maxRetries) {
+                        console.log('Max retries reached. Task status:', updatedTask.status);
+                        // Even if not inReview, update with current status
+                        onTaskUpdate(updatedTask);
+                        return;
+                      }
+                      
+                      setTimeout(() => {
+                        retryCount++;
+                        fetch(`/api/tasks/${task.id}`, {
+                          cache: 'no-store',
+                          headers: {
+                            'Cache-Control': 'no-cache'
+                          }
+                        })
+                          .then(res => res.json())
+                          .then(finalTask => {
+                            console.log(`Retry ${retryCount}: Task status = ${finalTask.status}, columnId = ${finalTask.columnId}`);
+                            if (finalTask && finalTask.status === 'inReview') {
+                              console.log('Task finally moved to InReview, updating UI...');
+                              onTaskUpdate(finalTask);
+                            } else if (retryCount < maxRetries) {
+                              retryFetch();
+                            } else {
+                              // Update with whatever status we have
+                              onTaskUpdate(finalTask);
+                            }
+                          })
+                          .catch(err => console.error(`Error on retry ${retryCount}:`, err));
+                      }, 2000);
+                    };
+                    
+                    retryFetch();
+                  }
+                })
+                .catch(err => console.error('Error fetching updated task:', err));
+            }, 2000); // Increased initial delay to give backend more time
+          }
         }
         // Don't auto-switch tabs anymore to prevent re-renders
       }
@@ -189,6 +257,74 @@ export default function TaskExecutionPanel({
       if (socketExecution.status === 'completed' && !devServerStarted && socketExecution.changes?.length > 0) {
         console.log('Execution completed via socket, should start dev server...');
         setShouldStartDevServer(true);
+        
+        // Fetch the updated task status from backend
+        // The backend should have moved it to InReview
+        if (onTaskUpdate && task) {
+          // Add a delay to ensure backend has updated the task
+          setTimeout(() => {
+            fetch(`/api/tasks/${task.id}`, {
+              cache: 'no-store',
+              headers: {
+                'Cache-Control': 'no-cache'
+              }
+            })
+              .then(res => res.json())
+              .then(updatedTask => {
+                console.log('Socket - Fetched updated task:', {
+                  id: updatedTask.id,
+                  status: updatedTask.status,
+                  columnId: updatedTask.columnId
+                });
+                
+                if (updatedTask && updatedTask.status === 'inReview') {
+                  console.log('Socket - Task moved to InReview, updating UI with columnId:', updatedTask.columnId);
+                  onTaskUpdate(updatedTask);
+                } else if (updatedTask) {
+                  // If not yet InReview, retry with more attempts
+                  console.log(`Socket - Task status is ${updatedTask.status}, retrying...`);
+                  let retryCount = 0;
+                  const maxRetries = 3;
+                  
+                  const retryFetch = () => {
+                    if (retryCount >= maxRetries) {
+                      console.log('Socket - Max retries reached. Task status:', updatedTask.status);
+                      // Even if not inReview, update with current status
+                      onTaskUpdate(updatedTask);
+                      return;
+                    }
+                    
+                    setTimeout(() => {
+                      retryCount++;
+                      fetch(`/api/tasks/${task.id}`, {
+                        cache: 'no-store',
+                        headers: {
+                          'Cache-Control': 'no-cache'
+                        }
+                      })
+                        .then(res => res.json())
+                        .then(finalTask => {
+                          console.log(`Socket - Retry ${retryCount}: Task status = ${finalTask.status}, columnId = ${finalTask.columnId}`);
+                          if (finalTask && finalTask.status === 'inReview') {
+                            console.log('Socket - Task finally moved to InReview, updating UI...');
+                            onTaskUpdate(finalTask);
+                          } else if (retryCount < maxRetries) {
+                            retryFetch();
+                          } else {
+                            // Update with whatever status we have
+                            onTaskUpdate(finalTask);
+                          }
+                        })
+                        .catch(err => console.error(`Socket - Error on retry ${retryCount}:`, err));
+                    }, 2000);
+                  };
+                  
+                  retryFetch();
+                }
+              })
+              .catch(err => console.error('Socket - Error fetching updated task:', err));
+          }, 2000); // Increased initial delay to give backend more time
+        }
       }
       
       // Check for dev server URL in summary (just for display, don't start again)

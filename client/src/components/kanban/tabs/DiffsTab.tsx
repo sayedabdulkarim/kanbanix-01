@@ -193,6 +193,50 @@ export default function DiffsTab({ task, onUpdateTask }: DiffsTabProps) {
     );
   };
 
+  const renderFileContent = (file: FileDiff) => {
+    // If we have stored file content, display it
+    if (file.fileContent && file.status !== 'deleted') {
+      if (file.status === 'added') {
+        // For new files, show the entire content with green background
+        return (
+          <div className="border-t border-border bg-green-500/5 overflow-x-auto">
+            <div className="px-3 py-2 bg-green-500/10 text-green-600 border-b font-mono text-xs">
+              + New file
+            </div>
+            <div className="font-mono text-xs">
+              {file.fileContent.split('\n').map((line, index) => (
+                <div key={index} className="px-2 py-0.5 bg-green-500/10">
+                  <span className="select-none mr-2 opacity-50 text-green-600">{index + 1}</span>
+                  <span className="text-green-600">+ {line}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      } else if (file.changes) {
+        // For modified files, show the diff
+        return (
+          <div className="border-t border-border bg-black/5 dark:bg-black/20 overflow-x-auto">
+            {file.changes.split('\n').map((line, index) => renderDiffLine(line, index))}
+          </div>
+        );
+      }
+    } else if (file.changes) {
+      // Fallback to showing just the diff if no content is stored
+      return (
+        <div className="border-t border-border bg-black/5 dark:bg-black/20 overflow-x-auto">
+          {file.changes.split('\n').map((line, index) => renderDiffLine(line, index))}
+        </div>
+      );
+    }
+    
+    return (
+      <div className="border-t border-border p-4 text-sm text-muted-foreground">
+        File content not available
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="p-4 border-b border-border">
@@ -355,11 +399,7 @@ export default function DiffsTab({ task, onUpdateTask }: DiffsTabProps) {
                       </div>
                     </div>
                     
-                    {expandedFiles.has(`${file.filePath}-${currentDiff.version}`) && (
-                      <div className="border-t border-border bg-black/5 dark:bg-black/20 overflow-x-auto">
-                        {file.changes.split('\n').map((line, index) => renderDiffLine(line, index))}
-                      </div>
-                    )}
+                    {expandedFiles.has(`${file.filePath}-${currentDiff.version}`) && renderFileContent(file)}
                   </div>
                 ))}
               </div>
