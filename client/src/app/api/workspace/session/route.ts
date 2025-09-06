@@ -86,8 +86,13 @@ export async function GET(request: NextRequest) {
           }
         }
         
-        // If we have commits ahead but sessionState shows 0, update it
-        if (actualCommitsAhead > 0 && sessionState.totalCommitsInSession === 0) {
+        // Update session state if commits or uncommitted changes have changed
+        const needsUpdate = 
+          actualCommitsAhead !== sessionState.totalCommitsInSession ||
+          hasUncommittedChanges !== sessionState.hasUncommittedChanges;
+        
+        if (needsUpdate) {
+          console.log(`Updating session state: commits ${sessionState.totalCommitsInSession} -> ${actualCommitsAhead}, uncommitted: ${hasUncommittedChanges}`);
           await prisma.sessionState.update({
             where: { id: sessionState.id },
             data: { 
@@ -96,12 +101,7 @@ export async function GET(request: NextRequest) {
             }
           });
           sessionState.totalCommitsInSession = actualCommitsAhead;
-        } else if (hasUncommittedChanges !== sessionState.hasUncommittedChanges) {
-          // Just update uncommitted changes if needed
-          await prisma.sessionState.update({
-            where: { id: sessionState.id },
-            data: { hasUncommittedChanges }
-          });
+          sessionState.hasUncommittedChanges = hasUncommittedChanges;
         }
       } catch (revListError) {
         console.log('Error in commit counting logic:', revListError);
@@ -122,13 +122,25 @@ export async function GET(request: NextRequest) {
       }
     });
 
+    // Debug logging
+    console.log('[Session GET] Response data:', {
+      sessionId: sessionState.id,
+      totalCommitsInSession: sessionState.totalCommitsInSession,
+      actualCommitsAhead,
+      hasUncommittedChanges,
+      prCreated: sessionState.prCreated,
+      tasksInReview: tasksInReview.length
+    });
+
     return NextResponse.json({
       exists: true,
       sessionState: {
         ...sessionState,
-        hasUncommittedChanges
+        hasUncommittedChanges,
+        totalCommitsInSession: sessionState.totalCommitsInSession || actualCommitsAhead
       },
       tasksInReview,
+      actualCommitsAhead,
       buttonStates: {
         commitAll: {
           enabled: tasksInReview.length > 0 && hasUncommittedChanges,
@@ -144,9 +156,15 @@ export async function GET(request: NextRequest) {
             ? 'Uncommitted changes exist' 
             : sessionState.prCreated 
               ? 'PR already created' 
-              : sessionState.totalCommitsInSession === 0
-                ? 'No commits in session'
-                : 'Ready to create PR'
+              : (sessionState.totalCommitsInSession === 0 && actualCommitsAhead === 0)
+                ? 'No commits to create PR from'
+                : 'Ready to create PR',
+          debug: {
+            hasUncommittedChanges,
+            prCreated: sessionState.prCreated,
+            totalCommitsInSession: sessionState.totalCommitsInSession,
+            actualCommitsAhead
+          }
         }
       }
     });

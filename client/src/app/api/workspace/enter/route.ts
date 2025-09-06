@@ -23,11 +23,13 @@ const WORKSPACE_CONFIG = {
 const workspaceLocks = new Map<string, boolean>();
 
 export async function POST(request: NextRequest) {
+  console.log('=== WORKSPACE ENTER ROUTE CALLED ===');
   let projectId: string | undefined;
   
   try {
     // Get session
     const session = await getServerSession(authOptions);
+    console.log('Auth session found:', !!session);
     if (!session?.user?.id || !session?.accessToken) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -81,6 +83,7 @@ export async function POST(request: NextRequest) {
 
     // Create workspace path
     const workspacePath = path.join(WORKSPACE_CONFIG.basePath, projectId);
+    let workspaceHandled = false; // Track if we've already handled the workspace setup
 
     // Check if workspace already exists
     let workspaceExists = false;
@@ -152,21 +155,9 @@ export async function POST(request: NextRequest) {
               }
             }
             
-            // Release lock before returning
-            workspaceLocks.delete(projectId);
-
-            return NextResponse.json({
-              success: true,
-              workspacePath,
-              message: 'Workspace refreshed with saved files restored',
-              filesRestored: true,
-              project: {
-                id: project.id,
-                name: project.name,
-                githubOwner: project.githubOwner,
-                githubRepo: project.githubRepo
-              }
-            });
+            // Don't return early - continue to session initialization
+            console.log('Files restored, continuing to session initialization...');
+            workspaceHandled = true; // Mark workspace as handled
           } catch (error) {
             console.error('Error during fetch/restore:', error);
             // Continue with normal flow
@@ -178,20 +169,9 @@ export async function POST(request: NextRequest) {
             await execAsync('git reset --hard origin/main', { cwd: workspacePath });
             await execAsync('git clean -fd', { cwd: workspacePath });
 
-            // Release lock before returning
-            workspaceLocks.delete(projectId);
-
-            return NextResponse.json({
-              success: true,
-              workspacePath,
-              message: 'Workspace refreshed with latest changes',
-              project: {
-                id: project.id,
-                name: project.name,
-                githubOwner: project.githubOwner,
-                githubRepo: project.githubRepo
-              }
-            });
+            // Don't return early - continue to session initialization
+            console.log('Workspace reset, continuing to session initialization...');
+            workspaceHandled = true; // Mark workspace as handled
           } catch (pullError: any) {
             console.log('Failed to pull latest changes, will re-clone:', pullError.message);
             isValidRepo = false;
@@ -275,14 +255,16 @@ export async function POST(request: NextRequest) {
       console.log(`Creating new workspace at ${workspacePath}`);
     }
 
-    // Ensure base workspace directory exists
-    await fs.mkdir(WORKSPACE_CONFIG.basePath, { recursive: true });
+    // Only clone if we haven't already handled the workspace
+    if (!workspaceHandled) {
+      // Ensure base workspace directory exists
+      await fs.mkdir(WORKSPACE_CONFIG.basePath, { recursive: true });
 
-    // Make absolutely sure the directory doesn't exist before cloning
-    try {
-      await fs.access(workspacePath);
-      // If we reach here, directory exists - remove it
-      console.log('Directory exists before clone, removing it completely...');
+      // Make absolutely sure the directory doesn't exist before cloning
+      try {
+        await fs.access(workspacePath);
+        // If we reach here, directory exists - remove it
+        console.log('Directory exists before clone, removing it completely...');
       try {
         if (process.platform === 'win32') {
           await execAsync(`rmdir /s /q "${workspacePath}"`);
@@ -393,6 +375,7 @@ export async function POST(request: NextRequest) {
         }, { status: 500 });
       }
     }
+    } // End of if (!workspaceHandled)
 
     // Configure git user for the workspace
     try {
@@ -567,7 +550,12 @@ export async function POST(request: NextRequest) {
       console.error('Error searching for existing PRs:', prSearchError);
     }
 
+    console.log('=== ABOUT TO INITIALIZE SESSION STATE ===');
+    console.log('Project ID:', projectId);
+    console.log('User ID:', session.user.id);
+    
     // Initialize or update SessionState
+    console.log('Starting SessionState initialization for project:', projectId);
     try {
       // First, find any existing active session
       const existingSession = await prisma.sessionState.findFirst({
@@ -577,12 +565,61 @@ export async function POST(request: NextRequest) {
           isActive: true
         }
       });
+      console.log('Existing session found:', existingSession ? 'Yes' : 'No');
+
+      // Count actual commits ahead of origin/main
+      let actualCommitsAhead = 0;
+      try {
+        // First fetch from origin to ensure we have latest remote state
+        try {
+          await execAsync('git fetch origin', { cwd: workspacePath });
+        } catch (fetchError) {
+          console.log('Could not fetch from origin:', fetchError);
+        }
+        
+        // Try to count commits ahead of origin/main
+        try {
+          const { stdout: aheadOutput } = await execAsync(
+            'git rev-list --count origin/main..HEAD',
+            { cwd: workspacePath }
+          );
+          actualCommitsAhead = parseInt(aheadOutput.trim()) || 0;
+        } catch (error) {
+          // If origin/main doesn't exist, count all commits in current branch
+          console.log('origin/main not found, counting all commits in branch');
+          try {
+            const { stdout: commitCount } = await execAsync(
+              'git rev-list --count HEAD',
+              { cwd: workspacePath }
+            );
+            const totalCommits = parseInt(commitCount.trim()) || 0;
+            // Subtract the initial commit to get actual work commits
+            actualCommitsAhead = Math.max(0, totalCommits - 1);
+          } catch (countError) {
+            console.log('Could not count commits:', countError);
+          }
+        }
+        console.log(`Session branch has ${actualCommitsAhead} commits ahead of origin/main`);
+        console.log('Session will be created/updated with totalCommitsInSession:', actualCommitsAhead);
+      } catch (error) {
+        console.error('Error counting commits:', error);
+      }
+
+      // Check for uncommitted changes
+      let hasUncommittedChanges = false;
+      try {
+        const { stdout: statusOutput } = await execAsync('git status --porcelain', { cwd: workspacePath });
+        hasUncommittedChanges = statusOutput.trim().length > 0;
+      } catch (statusError) {
+        console.log('Could not check git status:', statusError);
+      }
 
       const sessionData = {
         sessionBranch: branchName,
         baseBranch: 'main',
         workspacePath,
-        hasUncommittedChanges: branchInfo.hasUncommittedChanges,
+        hasUncommittedChanges,
+        totalCommitsInSession: actualCommitsAhead, // Set the actual commit count
         // Restore PR info if found
         prCreated: existingPR ? true : false,
         prUrl: existingPR?.url || null,
@@ -597,7 +634,7 @@ export async function POST(request: NextRequest) {
           where: { id: existingSession.id },
           data: sessionData
         });
-        console.log('SessionState updated for project:', projectId);
+        console.log(`SessionState updated for project: ${projectId}, commits: ${actualCommitsAhead}`);
       } else {
         // Create new SessionState for this session
         await prisma.sessionState.create({
@@ -605,15 +642,23 @@ export async function POST(request: NextRequest) {
             projectId,
             userId: session.user.id,
             ...sessionData,
-            isActive: true,
-            totalCommitsInSession: 0
+            isActive: true
           }
         });
-        console.log('SessionState created for project:', projectId);
+        console.log(`SessionState created for project: ${projectId}, commits: ${actualCommitsAhead}`);
       }
-    } catch (sessionError) {
+    } catch (sessionError: any) {
       console.error('Error initializing SessionState:', sessionError);
-      // Don't fail the workspace enter if session state fails
+      console.error('SessionState error details:', {
+        error: sessionError.message,
+        code: sessionError.code,
+        projectId,
+        userId: session.user.id,
+        branchName,
+        actualCommitsAhead
+      });
+      // Don't fail the workspace enter if session state fails - but log it prominently
+      console.error('⚠️ WARNING: SessionState not created/updated - PR button will not work!');
     }
 
     // Release lock on success

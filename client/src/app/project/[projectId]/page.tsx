@@ -75,6 +75,10 @@ export default function ProjectBoard() {
   const [totalCommitsInSession, setTotalCommitsInSession] = useState(0);
   const [isProcessingPRMerge, setIsProcessingPRMerge] = useState(false);
   
+  // Add refs to prevent duplicate initialization
+  const initializationRef = useRef(false);
+  const currentProjectIdRef = useRef<string | null>(null);
+  
   // Phase 4: Modal states
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
   const [isEndingSession, setIsEndingSession] = useState(false);
@@ -138,8 +142,19 @@ export default function ProjectBoard() {
       return;
     }
     
-    if (status === 'authenticated' && params.projectId && !isEndingSession) {
-      initializeProject();
+    // Check if we need to initialize or if project changed
+    const needsInit = status === 'authenticated' && 
+                     params.projectId && 
+                     !isEndingSession && 
+                     (!initializationRef.current || currentProjectIdRef.current !== params.projectId);
+    
+    if (needsInit) {
+      initializationRef.current = true;
+      currentProjectIdRef.current = params.projectId;
+      initializeProject().finally(() => {
+        // Reset initialization flag after completion to allow re-init if needed
+        initializationRef.current = false;
+      });
     }
   }, [params.projectId, status, router]);
 
