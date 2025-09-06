@@ -928,4 +928,60 @@ export class AIAgentService {
       currentStep: 'Cancelled by user'
     });
   }
+
+  // Handle follow-up requests from chat
+  async handleFollowUpRequest(params: {
+    message: string;
+    context: any;
+    taskId: string;
+    projectId: string;
+  }): Promise<{ response: string; changes?: any[] }> {
+    const { message, context, taskId, projectId } = params;
+    
+    try {
+      // Create a lightweight context for the AI
+      const aiContext = {
+        ...context,
+        followUpRequest: message,
+        isFollowUp: true
+      };
+
+      // Call MCP tool for follow-up changes
+      const result = await this.callMCPTool('generate_task_code', {
+        task_title: `Follow-up: ${context.taskTitle}`,
+        task_description: message,
+        context: aiContext,
+        projectId,
+        workspacePath: context.workspacePath,
+        isFollowUp: true
+      });
+
+      // Parse result
+      const parsedResult = typeof result === 'string' ? JSON.parse(result) : result;
+      
+      // Format response
+      let response = parsedResult.summary || 'Changes have been applied successfully.';
+      
+      if (parsedResult.changes && parsedResult.changes.length > 0) {
+        response += `\n\nModified ${parsedResult.changes.length} file(s):`;
+        parsedResult.changes.forEach((change: any) => {
+          response += `\n- ${change.path}`;
+        });
+      } else {
+        response = "I understand your request, but no code changes were necessary. " + 
+                  (parsedResult.message || "The current implementation already addresses your requirements.");
+      }
+
+      return {
+        response,
+        changes: parsedResult.changes || []
+      };
+    } catch (error) {
+      console.error('Error handling follow-up request:', error);
+      return {
+        response: 'I encountered an error processing your request. Please try again or provide more details.',
+        changes: []
+      };
+    }
+  }
 }

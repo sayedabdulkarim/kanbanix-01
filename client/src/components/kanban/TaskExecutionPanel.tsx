@@ -9,6 +9,7 @@ import {
 import { format } from 'date-fns';
 import { useExecutionSocket } from '@/lib/socket/useSocket';
 import DiffViewer from './DiffViewer';
+import ChatTab from './tabs/ChatTab';
 import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
 
 interface TaskExecution {
@@ -53,7 +54,7 @@ export default function TaskExecutionPanel({
 }: TaskExecutionPanelProps) {
   const [execution, setExecution] = useState<TaskExecution | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'logs' | 'diffs'>('logs');
+  const [activeTab, setActiveTab] = useState<'logs' | 'diffs' | 'chat'>('logs');
   const [taskDetailsExpanded, setTaskDetailsExpanded] = useState(true);
   const [devServerExpanded, setDevServerExpanded] = useState(false);
   const [chatMessage, setChatMessage] = useState('');
@@ -822,6 +823,22 @@ export default function TaskExecutionPanel({
             )}
           </span>
         </button>
+        {/* Show Chat tab only for InReview tasks */}
+        {task?.status === 'inReview' && (
+          <button
+            onClick={() => setActiveTab('chat')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'chat' 
+                ? 'border-primary text-foreground' 
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4" />
+              Chat
+            </span>
+          </button>
+        )}
       </div>
 
       {/* Tab Content - Using display instead of conditional rendering to prevent re-renders */}
@@ -901,39 +918,24 @@ export default function TaskExecutionPanel({
             )}
           </div>
         </div>
-      </div>
-
-      {/* Chat Section */}
-      <div className="border-t p-4">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={chatMessage}
-            onChange={(e) => setChatMessage(e.target.value)}
-            placeholder="Ask a follow-up question... Type @ to search files."
-            className="flex-1 px-3 py-2 text-sm border rounded-md bg-background"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && chatMessage.trim()) {
-                // TODO: Implement chat functionality
-                console.log('Send message:', chatMessage);
-                setChatMessage('');
-              }
-            }}
-          />
-          <button 
-            className="p-2 bg-primary text-primary-foreground rounded hover:bg-primary/90"
-            onClick={() => {
-              if (chatMessage.trim()) {
-                // TODO: Implement chat functionality
-                console.log('Send message:', chatMessage);
-                setChatMessage('');
-              }
-            }}
-          >
-            <Send className="h-4 w-4" />
-          </button>
+        {/* Chat Tab Content */}
+        <div style={{ display: activeTab === 'chat' ? 'block' : 'none' }}>
+          {task?.status === 'inReview' && (
+            <ChatTab 
+              task={task}
+              projectId={projectId}
+              onUpdateTask={onTaskUpdate}
+              onDiffsGenerated={() => {
+                // Refresh execution to get new diffs
+                fetchExecution();
+                // Switch to diffs tab to show the changes
+                setActiveTab('diffs');
+              }}
+            />
+          )}
         </div>
       </div>
+
 
       {/* Phase 2: Removed Commit Dialog - commit functionality now at board level */}
     </div>
