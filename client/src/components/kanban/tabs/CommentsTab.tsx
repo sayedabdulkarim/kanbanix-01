@@ -245,7 +245,7 @@ export default function CommentsTab({ task, projectId, onUpdateTask }: CommentsT
                   <td className="w-4 px-1 text-center select-none">
                     {line.startsWith('+') ? '+' : ''}
                   </td>
-                  <td className="px-2">
+                  <td className="px-2 whitespace-pre">
                     <span className={cn(
                       line.startsWith('+') && "text-green-600 dark:text-green-400",
                       line.startsWith('@@') && "text-blue-600 dark:text-blue-400"
@@ -424,7 +424,7 @@ export default function CommentsTab({ task, projectId, onUpdateTask }: CommentsT
                     )}
                     
                     {/* Comment and replies */}
-                    <div className="p-4">
+                    <div className="p-4 pl-12">
                             {/* Root comment */}
                             <div className="flex gap-3">
                               <img
