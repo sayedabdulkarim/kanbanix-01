@@ -10,6 +10,7 @@ import { format } from 'date-fns';
 import { useExecutionSocket } from '@/lib/socket/useSocket';
 import DiffViewer from './DiffViewer';
 import ChatTab from './tabs/ChatTab';
+import CommentsTab from './tabs/CommentsTab';
 import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
 
 interface TaskExecution {
@@ -54,7 +55,7 @@ export default function TaskExecutionPanel({
 }: TaskExecutionPanelProps) {
   const [execution, setExecution] = useState<TaskExecution | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'logs' | 'diffs' | 'chat'>('logs');
+  const [activeTab, setActiveTab] = useState<'logs' | 'diffs' | 'chat' | 'comments'>('logs');
   const [taskDetailsExpanded, setTaskDetailsExpanded] = useState(true);
   const [devServerExpanded, setDevServerExpanded] = useState(false);
   const [chatMessage, setChatMessage] = useState('');
@@ -839,6 +840,22 @@ export default function TaskExecutionPanel({
             </span>
           </button>
         )}
+        {/* Show Comments tab only for tasks with PR */}
+        {task?.githubPrNumber && (
+          <button
+            onClick={() => setActiveTab('comments')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'comments' 
+                ? 'border-primary text-foreground' 
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <GitPullRequest className="h-4 w-4" />
+              Comments
+            </span>
+          </button>
+        )}
       </div>
 
       {/* Tab Content - Using display instead of conditional rendering to prevent re-renders */}
@@ -931,6 +948,16 @@ export default function TaskExecutionPanel({
                 // Switch to diffs tab to show the changes
                 setActiveTab('diffs');
               }}
+            />
+          )}
+        </div>
+        {/* Comments Tab Content */}
+        <div style={{ display: activeTab === 'comments' ? 'block' : 'none' }}>
+          {task?.githubPrNumber && (
+            <CommentsTab 
+              task={task}
+              projectId={projectId}
+              onUpdateTask={onTaskUpdate}
             />
           )}
         </div>

@@ -67,10 +67,10 @@ Task Title: "${title}"
 Description: "${description || 'No description provided'}"
 
 Available agent types and their purposes:
-1. code_generator - User wants to CREATE new code, components, or features
+1. code_generator - User wants to CREATE new code, components, features, or ADD/MODIFY UI elements (including text, descriptions, labels in the app)
 2. bug_fixer - User wants to FIX existing broken code or resolve issues
 3. testing - User wants to write or generate tests
-4. documentation - User wants to create or update documentation
+4. documentation - User wants to create or update DOCUMENTATION FILES (README, API docs, code comments) - NOT UI text
 5. refactoring - User wants to improve existing code without changing functionality
 6. review - User wants code review or analysis
 
@@ -80,6 +80,9 @@ IMPORTANT RULES:
 - "Fix the broken component" → bug_fixer (FIX action)
 - "Add error handling" → code_generator (ADD action)
 - "Debug the error" → bug_fixer (DEBUG action)
+- "Add a description to the app" → code_generator (modifying UI)
+- "Write documentation for the app" → documentation (creating docs)
+- "Add a title/text/label to component" → code_generator (UI change)
 - Default to code_generator for ambiguous cases
 
 Respond with ONLY this JSON structure, no other text:

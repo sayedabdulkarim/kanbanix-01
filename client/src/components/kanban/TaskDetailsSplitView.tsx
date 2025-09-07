@@ -17,6 +17,7 @@ import ActivityTab from './tabs/ActivityTab';
 
 interface TaskDetailsSplitViewProps {
   task: Task | null;
+  projectId: string;
   onClose: () => void;
   onUpdateTask: (taskId: string, updates: Partial<Task>) => void;
   onDeleteTask?: (taskId: string) => void;
@@ -24,6 +25,7 @@ interface TaskDetailsSplitViewProps {
 
 export default function TaskDetailsSplitView({
   task,
+  projectId,
   onClose,
   onUpdateTask,
   onDeleteTask,
@@ -323,7 +325,7 @@ export default function TaskDetailsSplitView({
             </Tabs.Content>
             
             <Tabs.Content value="comments" className="h-full">
-              <CommentsTab task={task} onUpdateTask={onUpdateTask} />
+              <CommentsTab task={task} projectId={projectId} onUpdateTask={onUpdateTask} />
             </Tabs.Content>
             
             <Tabs.Content value="activity" className="h-full">

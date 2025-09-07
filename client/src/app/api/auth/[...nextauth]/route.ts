@@ -71,12 +71,13 @@ export const authOptions = {
             where: { email },
           });
           
-          // If found by email, update the githubId
+          // If found by email, update the githubId and token
           if (dbUser) {
             dbUser = await prisma.user.update({
               where: { id: dbUser.id },
               data: {
                 githubId,
+                githubToken: account.access_token,
                 name: profile.name || profile.login,
                 image: profile.avatar_url,
               },
@@ -89,9 +90,18 @@ export const authOptions = {
           dbUser = await prisma.user.create({
             data: {
               githubId,
+              githubToken: account.access_token,
               email: email || `${profile.login}@github.local`, // Fallback email if null
               name: profile.name || profile.login,
               image: profile.avatar_url,
+            },
+          });
+        } else if (!dbUser.githubToken) {
+          // Update existing user with GitHub token if not already present
+          dbUser = await prisma.user.update({
+            where: { id: dbUser.id },
+            data: {
+              githubToken: account.access_token,
             },
           });
         }

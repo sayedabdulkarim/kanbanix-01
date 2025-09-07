@@ -1344,6 +1344,7 @@ export default function ProjectBoard() {
             ) : (
               <TaskDetailsSplitView
                 task={selectedTaskForDetails}
+                projectId={params.projectId}
                 onClose={() => setSelectedTaskForDetails(null)}
                 onUpdateTask={handleUpdateTaskFromDetails}
                 onDeleteTask={handleDeleteTask}
