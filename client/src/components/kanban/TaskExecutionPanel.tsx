@@ -57,7 +57,6 @@ export default function TaskExecutionPanel({
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'logs' | 'diffs' | 'chat' | 'comments'>('logs');
   const [taskDetailsExpanded, setTaskDetailsExpanded] = useState(true);
-  const [devServerExpanded, setDevServerExpanded] = useState(false);
   const [chatMessage, setChatMessage] = useState('');
   const [expandAllDiffs, setExpandAllDiffs] = useState<boolean | undefined>(undefined);
   const [branchInfo, setBranchInfo] = useState<any>(null);
@@ -70,10 +69,6 @@ export default function TaskExecutionPanel({
   const [commitStatus, setCommitStatus] = useState<{ type: 'success' | 'error' | null; message: string }>({ type: null, message: '' });
   const [prCreated, setPrCreated] = useState(false);
   const [prUrl, setPrUrl] = useState<string | null>(null);
-  const [devServerUrl, setDevServerUrl] = useState<string | null>(null);
-  const [devServerStatus, setDevServerStatus] = useState<'stopped' | 'starting' | 'running' | 'error'>('stopped');
-  const [devServerStarted, setDevServerStarted] = useState(false);
-  const [shouldStartDevServer, setShouldStartDevServer] = useState(false);
 
   // WebSocket for real-time updates
   const { execution: socketExecution, logs: socketLogs } = useExecutionSocket(execution?.id || null);
@@ -87,19 +82,9 @@ export default function TaskExecutionPanel({
         console.log('Fetched execution with changes:', data.changes?.length || 0);
         setExecution(data);
         
-        // Check if execution has dev server URL in summary
-        if (data.summary) {
-          const urlMatch = data.summary.match(/\[DEV_SERVER_URL\](.*?)\[\/DEV_SERVER_URL\]/);
-          if (urlMatch) {
-            setDevServerUrl(urlMatch[1]);
-            setDevServerStatus('pending');
-          }
-        }
-        
-        // If execution completed and has changes, try to start dev server
-        if (data.status === 'completed' && data.changes && data.changes.length > 0 && !devServerStarted) {
-          console.log('Execution completed, should start dev server...');
-          setShouldStartDevServer(true);
+        // Execution data loaded
+        if (data.status === 'completed') {
+          console.log('Execution completed');
           
           // Fetch the updated task status from backend
           // The backend should have moved it to InReview
@@ -178,38 +163,6 @@ export default function TaskExecutionPanel({
     }
   };
 
-  // Define startDevServerForProject first, before any useEffect that uses it
-  const startDevServerForProject = useCallback(async () => {
-    if (!projectId || devServerStatus === 'running' || devServerStatus === 'starting' || devServerStarted) return;
-    
-    try {
-      setDevServerStatus('starting');
-      setDevServerStarted(true);
-      const response = await apiFetch(API_ENDPOINTS.workspace.devServer, {
-        method: 'POST',
-        body: JSON.stringify({ 
-          projectId, 
-          taskId: task.id,
-          executionId: execution?.id 
-        })
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        if (data.url) {
-          setDevServerUrl(data.url);
-          setDevServerStatus('running');
-          console.log('Dev server started at:', data.url);
-        }
-      } else {
-        console.error('Failed to start dev server');
-        setDevServerStatus('error');
-      }
-    } catch (error) {
-      console.error('Error starting dev server:', error);
-      setDevServerStatus('error');
-    }
-  }, [projectId, devServerStatus, task.id, execution?.id, devServerStarted]);
 
   const fetchBranchInfo = async () => {
     try {
@@ -255,10 +208,9 @@ export default function TaskExecutionPanel({
         logs: socketLogs || prev?.logs || []
       }));
       
-      // Check if execution just completed and we haven't started dev server yet
-      if (socketExecution.status === 'completed' && !devServerStarted && socketExecution.changes?.length > 0) {
-        console.log('Execution completed via socket, should start dev server...');
-        setShouldStartDevServer(true);
+      // Check if execution just completed
+      if (socketExecution.status === 'completed' && socketExecution.changes?.length > 0) {
+        console.log('Execution completed via socket');
         
         // Fetch the updated task status from backend
         // The backend should have moved it to InReview
@@ -334,9 +286,7 @@ export default function TaskExecutionPanel({
         const urlMatch = socketExecution.summary.match(/\[DEV_SERVER_URL\](.*?)\[\/DEV_SERVER_URL\]/);
         if (urlMatch && urlMatch[1] === 'pending') {
           // Dev server should be started, just mark status
-          if (!devServerStarted) {
-            setShouldStartDevServer(true);
-          }
+          // Execution completed
         }
       }
     }
@@ -345,28 +295,14 @@ export default function TaskExecutionPanel({
     if (socketLogs && socketLogs.length > 0) {
       const lastLog = socketLogs[socketLogs.length - 1];
       if (lastLog.message?.includes('Dev server ready at')) {
-        // This log comes from the dev-server route with the actual URL
-        const urlMatch = lastLog.message.match(/http:\/\/localhost:\d+/);
-        if (urlMatch) {
-          setDevServerUrl(urlMatch[0]);
-          setDevServerStatus('running');
-        }
+        // Dev server is now managed at project level
       } else if (lastLog.message?.includes('Starting development server')) {
-        setDevServerStatus('starting');
-      } else if (lastLog.message?.includes('Code generation completed') && !devServerStarted) {
-        // Start dev server when code generation completes
-        setShouldStartDevServer(true);
+        // Dev server is now managed at project level
+      } else if (lastLog.message?.includes('Code generation completed')) {
+        // Code generation completed
       }
     }
-  }, [socketExecution, socketLogs, devServerStarted]);
-  
-  // Handle dev server start when flag is set
-  useEffect(() => {
-    if (shouldStartDevServer && !devServerStarted) {
-      setShouldStartDevServer(false);
-      startDevServerForProject();
-    }
-  }, [shouldStartDevServer, devServerStarted, startDevServerForProject]);
+  }, [socketExecution, socketLogs]);
 
   // Re-fetch execution when status changes to completed to get changes
   useEffect(() => {
@@ -691,105 +627,6 @@ export default function TaskExecutionPanel({
         )}
       </div>
 
-      {/* Dev Server Section */}
-      <div className="border-b">
-        <button
-          onClick={() => setDevServerExpanded(!devServerExpanded)}
-          className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/50"
-        >
-          <div className="flex items-center gap-2">
-            {devServerExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-            <span className="font-medium">Dev Server</span>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Phase 2: Removed Create PR button - now at board level */}
-            {execution?.status === 'completed' && prCreated && (
-              <div className="flex items-center gap-2 px-3 py-1 text-sm text-green-500">
-                <GitPullRequest className="h-3 w-3" />
-                PR Created
-              </div>
-            )}
-            {/* Show status when running */}
-            {execution?.status === 'running' && (
-              <div className="flex items-center gap-2 px-3 py-1 text-sm text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                AI is generating code...
-              </div>
-            )}
-            {/* Phase 2: Removed New Attempt button */}
-          </div>
-        </button>
-        
-        {devServerExpanded && (
-          <div className="px-4 pb-3">
-            <div className="bg-muted rounded p-3">
-              {devServerUrl ? (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <div className={`h-2 w-2 rounded-full ${
-                      devServerStatus === 'running' ? 'bg-green-500 animate-pulse' : 
-                      devServerStatus === 'starting' ? 'bg-yellow-500 animate-pulse' :
-                      devServerStatus === 'error' ? 'bg-red-500' : 'bg-gray-500'
-                    }`} />
-                    <span className="text-sm font-medium">
-                      {devServerStatus === 'running' ? 'Dev Server Running' :
-                       devServerStatus === 'starting' ? 'Starting Server...' :
-                       devServerStatus === 'error' ? 'Server Error' : 'Server Stopped'}
-                    </span>
-                  </div>
-                  {(devServerStatus === 'running' || devServerStatus === 'stopped') && (
-                    <div className="flex items-center justify-between">
-                      {devServerStatus === 'running' ? (
-                        <>
-                          <a
-                            href={devServerUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-500 hover:text-blue-400 flex items-center gap-2 font-mono text-sm"
-                          >
-                            {devServerUrl}
-                            <ExternalLink className="h-3 w-3" />
-                          </a>
-                          <button
-                            onClick={async () => {
-                              // Stop the server
-                              setDevServerStatus('stopped');
-                              // Keep the URL for restart
-                            }}
-                            className="text-xs px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
-                          >
-                            Stop
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-sm text-muted-foreground">Server stopped</span>
-                          <button
-                            onClick={() => {
-                              // Restart the server
-                              setDevServerStarted(false);
-                              setShouldStartDevServer(true);
-                            }}
-                            className="text-xs px-2 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
-                          >
-                            Restart
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-sm text-muted-foreground">
-                  {execution?.status === 'running' ? 
-                    'Dev server will start after code generation...' : 
-                    'No dev server running'}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
 
       {/* Tabs */}
       <div className="flex border-b">

@@ -34,6 +34,7 @@ import TaskDetailsSplitView from '@/components/kanban/TaskDetailsSplitView';
 import TaskExecutionPanel from '@/components/kanban/TaskExecutionPanel';
 import CommitModal from '@/components/modals/CommitModal';
 import UncommittedChangesModal from '@/components/modals/UncommittedChangesModal';
+import DevServerPanel from '@/components/dev-server/DevServerPanel';
 
 interface ProjectData {
   id: string;
@@ -78,6 +79,7 @@ export default function ProjectBoard() {
   // Add refs to prevent duplicate initialization
   const initializationRef = useRef(false);
   const currentProjectIdRef = useRef<string | null>(null);
+  const processedMergedTasksRef = useRef<Set<string>>(new Set());
   
   // Phase 4: Modal states
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
@@ -365,9 +367,14 @@ export default function ProjectBoard() {
       }
       
       // After PR check, handle merged tasks if they exist
-      if (tasksJustMerged.length > 0 && !isProcessingPRMerge && !checkingForMerge) {
-        console.log('[Merge Detection] Found merged tasks in done column, updating UI...');
+      const unprocessedMergedTasks = tasksJustMerged.filter(t => !processedMergedTasksRef.current.has(t.id));
+      if (unprocessedMergedTasks.length > 0 && !isProcessingPRMerge && !checkingForMerge) {
+        console.log('[Merge Detection] Found NEW merged tasks in done column, updating UI...');
         setIsProcessingPRMerge(true);
+        
+        // Mark these tasks as processed
+        unprocessedMergedTasks.forEach(t => processedMergedTasksRef.current.add(t.id));
+        
         toast.success('PR merged! Tasks moved to Done.');
         
         // Refresh the data to show updated state
@@ -1246,7 +1253,7 @@ export default function ProjectBoard() {
         </div>
       </div>
 
-      <div className="flex h-[calc(100vh-8rem)]">
+      <div className="flex h-[calc(100vh-8rem)] pb-12">
         <div className={cn(
           "transition-all duration-300",
           selectedTaskForDetails ? "w-1/2" : 
@@ -1417,6 +1424,12 @@ export default function ProjectBoard() {
         onConfirm={proceedWithEndSession}
         uncommittedTasks={uncommittedTasks}
         hasUncommittedChanges={hasUncommittedChanges}
+      />
+      
+      {/* Dev Server Panel */}
+      <DevServerPanel
+        projectId={params.projectId as string}
+        projectPath={`projects/${params.projectId}`}
       />
     </div>
   );

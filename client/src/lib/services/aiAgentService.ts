@@ -219,11 +219,7 @@ export class AIAgentService {
         progress: 100,
         currentStep: 'Completed',
         summary: result.summary,
-        changes: JSON.stringify(result.changes || []),
-        // Store dev server URL in summary for now
-        ...(result.devServerUrl && { 
-          summary: `${result.summary}\n[DEV_SERVER_URL]${result.devServerUrl}[/DEV_SERVER_URL]` 
-        })
+        changes: JSON.stringify(result.changes || [])
       });
 
       // Phase 2: Move task based on build validation result
@@ -440,8 +436,7 @@ export class AIAgentService {
     const mcpBuildValidation = mcpResult.buildValidation;
     console.log('MCP Build Validation Result:', mcpBuildValidation);
     
-    // Run build validation and start dev server if this is a new project or major update
-    let devServerUrl = null;
+    // Run build validation (dev server is now managed manually by user)
     let buildValidationPassed = false;
     
     if (changes.length > 0) {
@@ -475,29 +470,13 @@ export class AIAgentService {
           }
         }
         
-        // Only start dev server if build passed (or if we want to try anyway in dev mode)
-        if (buildValidationPassed || process.env.NODE_ENV === 'development') {
-          // Start dev server
-          await this.updateProgress(executionId, 90, 'Starting development server...');
-          const serverResult = await this.startDevServer(execution.task.projectId, executionId);
-          
-          if (serverResult.success) {
-            await this.addExecutionLog(executionId, 'info', `🚀 Dev server started at ${serverResult.url}`);
-            devServerUrl = serverResult.url; // Pass the actual URL
-          } else {
-            await this.addExecutionLog(executionId, 'warning', `⚠️ Could not start dev server: ${serverResult.error || 'Unknown error'}`);
-          }
-        } else {
-          await this.addExecutionLog(executionId, 'warning', `⚠️ Skipping dev server start due to build errors`);
-          // Still try to start dev server as it might work in dev mode
-          const serverResult = await this.startDevServer(execution.task.projectId, executionId);
-          if (serverResult.success) {
-            await this.addExecutionLog(executionId, 'info', `🚀 Dev server started despite build errors at ${serverResult.url}`);
-            devServerUrl = serverResult.url;
-          } else {
-            await this.addExecutionLog(executionId, 'warning', `⚠️ Could not start dev server: ${serverResult.error || 'Unknown error'}`);
-          }
+        // Dev server is now managed manually by the user through DevServerPanel
+        // We don't automatically start it during code generation
+        await this.updateProgress(executionId, 90, 'Code generation completed');
+        if (!buildValidationPassed) {
+          await this.addExecutionLog(executionId, 'warning', '⚠️ Build validation had some issues. Check the logs above.');
         }
+        await this.addExecutionLog(executionId, 'info', '✅ Code generation completed. Use the Dev Server panel at the bottom to start the development server.');
       } catch (error) {
         console.error('Error during build/server setup:', error);
         await this.addExecutionLog(executionId, 'warning', 'Could not start dev server automatically');
@@ -547,7 +526,6 @@ export class AIAgentService {
     return {
       summary: mcpResult.summary || `Code generated successfully for task: ${input.title}`,
       changes: changes,
-      devServerUrl,
       buildValidation: mcpBuildValidation || { success: buildValidationPassed },
       buildPassed: buildValidationPassed
     };
@@ -801,7 +779,7 @@ export class AIAgentService {
   // Start dev server
   private async startDevServer(projectId: string, executionId: string): Promise<any> {
     try {
-      console.log('Starting dev server for project:', projectId);
+      console.log('Checking dev server status for project:', projectId);
       
       // Since this runs server-side in API routes, we need to construct the full URL
       // The main Kanbanix app API is on port 3000 (or PORT env var)
@@ -810,7 +788,29 @@ export class AIAgentService {
       const baseUrl = `http://localhost:${mainAppPort}`;
       const url = `${baseUrl}/api/workspace/dev-server`;
       
-      console.log('Calling dev server API at:', url);
+      // First check if dev server is already running
+      const checkResponse = await fetch(`${url}?projectId=${projectId}`, {
+        method: 'GET',
+        headers: {
+          'x-internal-api-key': process.env.INTERNAL_API_KEY || 'dev-internal-call'
+        }
+      });
+      
+      if (checkResponse.ok) {
+        const status = await checkResponse.json();
+        if (status.running) {
+          console.log('Dev server already running on port:', status.port);
+          return { 
+            success: true, 
+            port: status.port, 
+            url: `http://localhost:${status.port}`,
+            status: 'already_running',
+            message: 'Dev server already running'
+          };
+        }
+      }
+      
+      console.log('Starting new dev server for project:', projectId);
       
       // Call the API to actually start the dev server
       const response = await fetch(url, {
