@@ -8,7 +8,8 @@ import ReactMarkdown from 'react-markdown';
 import { 
   MessageSquare, Send, Edit2, Trash2, RefreshCw, 
   GitPullRequest, Code, User, Bot, ChevronDown, 
-  ChevronRight, AlertCircle, CheckCircle, XCircle, Clock 
+  ChevronRight, AlertCircle, CheckCircle, XCircle, Clock,
+  Reply
 } from 'lucide-react';
 import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
 
@@ -28,6 +29,9 @@ interface GitHubComment {
   path?: string;
   line?: number;
   diff_hunk?: string;
+  in_reply_to_id?: number;
+  position?: number;
+  original_position?: number;
 }
 
 interface GitHubReview {
@@ -58,6 +62,8 @@ export default function CommentsTab({ task, projectId, onUpdateTask }: CommentsT
   const [expandedDiffs, setExpandedDiffs] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [showGitHub, setShowGitHub] = useState(true);
+  const [replyingTo, setReplyingTo] = useState<number | null>(null);
+  const [replyText, setReplyText] = useState('');
 
   // Fetch comments from GitHub
   const fetchComments = useCallback(async (showRefreshing = false) => {
@@ -143,6 +149,57 @@ export default function CommentsTab({ task, projectId, onUpdateTask }: CommentsT
     }
   };
 
+  // Handle reply to a comment
+  const handleReply = async (commentId: number) => {
+    if (!replyText.trim()) return;
+
+    if (!task.githubPrNumber) {
+      setError('Cannot post reply: No GitHub PR associated with this task');
+      return;
+    }
+
+    setIsSending(true);
+    setError(null);
+
+    try {
+      // Find the comment we're replying to
+      const originalComment = comments.find(c => c.id === commentId);
+      
+      const requestBody: any = {
+        projectId,
+        prNumber: task.githubPrNumber,
+        body: replyText.trim(),
+        inReplyTo: commentId,
+        taskId: task.id
+      };
+
+      // If this is a review comment (has path and line), include those for proper threading
+      if (originalComment?.type === 'review_comment' && originalComment.path && originalComment.line) {
+        requestBody.path = originalComment.path;
+        requestBody.line = originalComment.line;
+      }
+
+      const response = await apiFetch(`/api/github/pr-comments/create`, {
+        method: 'POST',
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to post reply');
+      }
+
+      setReplyText('');
+      setReplyingTo(null);
+      await fetchComments(false);
+    } catch (error) {
+      console.error('Error posting reply:', error);
+      setError('Failed to post reply. Please try again.');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+
   const toggleDiffExpanded = (commentId: number) => {
     const newExpanded = new Set(expandedDiffs);
     if (newExpanded.has(commentId)) {
@@ -163,12 +220,15 @@ export default function CommentsTab({ task, projectId, onUpdateTask }: CommentsT
       lineNumber = parseInt(headerMatch[1]) - 1;
     }
     
+    // Filter out deletion lines (red lines) - only show additions and context
+    const filteredLines = lines.filter(line => !line.startsWith('-') || line.startsWith('---'));
+    
     return (
       <div className="font-mono text-xs overflow-x-auto">
         <table className="w-full">
           <tbody>
-            {lines.map((line, idx) => {
-              if (!line.startsWith('-') && !line.startsWith('@@')) {
+            {filteredLines.map((line, idx) => {
+              if (!line.startsWith('@@')) {
                 lineNumber++;
               }
               
@@ -176,23 +236,21 @@ export default function CommentsTab({ task, projectId, onUpdateTask }: CommentsT
                 <tr
                   key={idx}
                   className={cn(
-                    line.startsWith('+') && "bg-green-500/10",
-                    line.startsWith('-') && "bg-red-500/10"
+                    line.startsWith('+') && "bg-green-500/10"
                   )}
                 >
                   <td className="w-10 px-2 text-right text-muted-foreground select-none">
-                    {!line.startsWith('@@') && !line.startsWith('-') ? lineNumber : ''}
+                    {!line.startsWith('@@') ? lineNumber : ''}
                   </td>
                   <td className="w-4 px-1 text-center select-none">
-                    {line.startsWith('+') ? '+' : line.startsWith('-') ? '-' : ''}
+                    {line.startsWith('+') ? '+' : ''}
                   </td>
                   <td className="px-2">
                     <span className={cn(
                       line.startsWith('+') && "text-green-600 dark:text-green-400",
-                      line.startsWith('-') && "text-red-600 dark:text-red-400",
                       line.startsWith('@@') && "text-blue-600 dark:text-blue-400"
                     )}>
-                      {line.startsWith('+') || line.startsWith('-') ? line.substring(1) : line}
+                      {line.startsWith('+') ? line.substring(1) : line}
                     </span>
                   </td>
                 </tr>
@@ -232,21 +290,44 @@ export default function CommentsTab({ task, projectId, onUpdateTask }: CommentsT
     }
   };
 
-  // Group comments by file for line-specific comments
+  // Group comments by file and thread them properly
   const groupedComments = comments.reduce((acc, comment) => {
-    if (comment.path) {
+    // Only include review comments (comments on specific lines)
+    if (comment.type === 'review_comment' && comment.path) {
       if (!acc[comment.path]) {
         acc[comment.path] = [];
       }
       acc[comment.path].push(comment);
-    } else {
-      if (!acc['general']) {
-        acc['general'] = [];
-      }
-      acc['general'].push(comment);
     }
+    // Skip general comments entirely
     return acc;
   }, {} as Record<string, GitHubComment[]>);
+
+  // Organize comments into threads (parent comments with their replies)
+  const organizeThreads = (fileComments: GitHubComment[]) => {
+    const threads: Map<number, GitHubComment[]> = new Map();
+    const rootComments: GitHubComment[] = [];
+    
+    // First pass: identify root comments and create thread map
+    fileComments.forEach(comment => {
+      if (!comment.in_reply_to_id) {
+        rootComments.push(comment);
+        threads.set(comment.id, []);
+      }
+    });
+    
+    // Second pass: add replies to their parent threads
+    fileComments.forEach(comment => {
+      if (comment.in_reply_to_id && threads.has(comment.in_reply_to_id)) {
+        threads.get(comment.in_reply_to_id)!.push(comment);
+      }
+    });
+    
+    // Sort root comments by position/line number
+    rootComments.sort((a, b) => (a.original_position || a.line || 0) - (b.original_position || b.line || 0));
+    
+    return { rootComments, threads };
+  };
 
   // Show PR icon in header if task has PR
   const hasPR = !!task.githubPrNumber;
@@ -300,135 +381,154 @@ export default function CommentsTab({ task, projectId, onUpdateTask }: CommentsT
           </div>
         ) : (
           <>
-            {/* Reviews */}
-            {reviews.length > 0 && (
-              <div className="mb-6">
-                <h4 className="font-medium text-sm mb-3">Reviews</h4>
-                <div className="space-y-3">
-                  {reviews.map((review) => (
-                    <div key={review.id} className="flex gap-3">
-                      <img
-                        src={review.user.avatar_url}
-                        alt={review.user.login}
-                        className="w-8 h-8 rounded-full"
-                      />
-                      <div className="flex-1">
-                        <div className="bg-secondary rounded-lg p-3">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-sm">{review.user.login}</span>
-                              {renderReviewState(review.state)}
-                            </div>
-                            <span className="text-xs text-muted-foreground">
-                              {review.submitted_at ? formatDistanceToNow(new Date(review.submitted_at), { addSuffix: true }) : 'Unknown time'}
-                            </span>
-                          </div>
-                          {review.body && (
-                            <div className="prose prose-sm dark:prose-invert max-w-none">
-                              <ReactMarkdown>{review.body}</ReactMarkdown>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
-            {/* General comments */}
-            {groupedComments['general']?.length > 0 && (
-              <div className="mb-6">
-                <h4 className="font-medium text-sm mb-3">General Comments</h4>
-                <div className="space-y-3">
-                  {groupedComments['general'].map((comment) => (
-                    <div key={comment.id} className="flex gap-3">
-                      <img
-                        src={comment.user.avatar_url}
-                        alt={comment.user.login}
-                        className="w-8 h-8 rounded-full"
-                      />
-                      <div className="flex-1">
-                        <div className="bg-secondary rounded-lg p-3">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-sm">{comment.user.login}</span>
-                              {comment.user.type === 'Bot' && (
-                                <Bot className="h-3 w-3 text-muted-foreground" />
-                              )}
-                            </div>
-                            <span className="text-xs text-muted-foreground">
-                              {comment.created_at ? formatDistanceToNow(new Date(comment.created_at), { addSuffix: true }) : 'Unknown time'}
-                            </span>
-                          </div>
-                          <div className="prose prose-sm dark:prose-invert max-w-none">
-                            <ReactMarkdown>{comment.body}</ReactMarkdown>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {/* Review comments with code context */}
-            {Object.entries(groupedComments).filter(([path]) => path !== 'general').map(([path, fileComments]) => (
-              <div key={path} className="mb-6">
-                <div className="border border-border rounded-lg overflow-hidden">
-                  {/* File header */}
-                  <div className="bg-secondary/50 px-4 py-2 border-b border-border">
-                    <div className="flex items-center gap-2 font-mono text-sm">
-                      <Code className="h-4 w-4" />
-                      {path}
+            {(() => {
+              // Get all root comments from all files
+              const allRootComments: Array<{comment: GitHubComment, replies: GitHubComment[]}> = [];
+              
+              Object.entries(groupedComments).forEach(([path, fileComments]) => {
+                const { rootComments, threads } = organizeThreads(fileComments);
+                rootComments.forEach(comment => {
+                  allRootComments.push({
+                    comment,
+                    replies: threads.get(comment.id) || []
+                  });
+                });
+              });
+              
+              // Sort all comments by line number/position
+              allRootComments.sort((a, b) => 
+                (a.comment.original_position || a.comment.line || 0) - 
+                (b.comment.original_position || b.comment.line || 0)
+              );
+              
+              // Render each comment as a separate section
+              return allRootComments.map(({ comment, replies }) => (
+                <div key={comment.id} className="mb-6">
+                  <div className="border border-border rounded-lg overflow-hidden">
+                    {/* File header for this specific comment */}
+                    <div className="bg-secondary/50 px-4 py-2 border-b border-border">
+                      <div className="flex items-center gap-2 font-mono text-sm">
+                        <Code className="h-4 w-4" />
+                        {comment.path}
+                      </div>
                     </div>
-                  </div>
-                  
-                  {/* Comments with code */}
-                  <div className="divide-y divide-border">
-                    {fileComments.map((comment) => (
-                      <div key={comment.id} className="bg-background">
-                        {/* Code context */}
-                        {comment.diff_hunk && (
-                          <div className="bg-secondary/20 border-b border-border">
-                            {renderDiffHunk(comment.diff_hunk)}
-                          </div>
-                        )}
-                        
-                        {/* Comment */}
-                        <div className="p-4">
-                          <div className="flex gap-3">
-                            <img
-                              src={comment.user.avatar_url}
-                              alt={comment.user.login}
-                              className="w-8 h-8 rounded-full"
-                            />
-                            <div className="flex-1">
-                              <div className="border border-border rounded-lg">
-                                <div className="bg-secondary/30 px-3 py-2 border-b border-border flex items-center justify-between">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-medium text-sm">{comment.user.login}</span>
-                                    <span className="text-xs text-muted-foreground">commented</span>
+                    
+                    {/* Code context for this comment */}
+                    {comment.diff_hunk && (
+                      <div className="bg-secondary/20 border-b border-border">
+                        {renderDiffHunk(comment.diff_hunk)}
+                      </div>
+                    )}
+                    
+                    {/* Comment and replies */}
+                    <div className="p-4">
+                            {/* Root comment */}
+                            <div className="flex gap-3">
+                              <img
+                                src={comment.user.avatar_url}
+                                alt={comment.user.login}
+                                className="w-8 h-8 rounded-full flex-shrink-0"
+                              />
+                              <div className="flex-1">
+                                <div className="border border-border rounded-lg">
+                                  <div className="bg-secondary/30 px-3 py-2 border-b border-border flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-medium text-sm">{comment.user.login}</span>
+                                      <span className="text-xs text-muted-foreground">commented</span>
+                                    </div>
+                                    <span className="text-xs text-muted-foreground">
+                                      {comment.created_at ? formatDistanceToNow(new Date(comment.created_at), { addSuffix: true }) : 'Unknown time'}
+                                    </span>
                                   </div>
-                                  <span className="text-xs text-muted-foreground">
-                                    {comment.created_at ? formatDistanceToNow(new Date(comment.created_at), { addSuffix: true }) : 'Unknown time'}
-                                  </span>
+                                  <div className="p-3">
+                                    <div className="prose prose-sm dark:prose-invert max-w-none">
+                                      <ReactMarkdown>{comment.body}</ReactMarkdown>
+                                    </div>
+                                  </div>
                                 </div>
-                                <div className="p-3">
-                                  <div className="prose prose-sm dark:prose-invert max-w-none">
-                                    <ReactMarkdown>{comment.body}</ReactMarkdown>
+                                
+                                {/* Replies to this comment */}
+                                {replies.map((reply) => (
+                                  <div key={reply.id} className="mt-3 ml-4 flex gap-3">
+                                    <img
+                                      src={reply.user.avatar_url}
+                                      alt={reply.user.login}
+                                      className="w-6 h-6 rounded-full flex-shrink-0"
+                                    />
+                                    <div className="flex-1">
+                                      <div className="border border-border rounded-lg">
+                                        <div className="bg-secondary/20 px-3 py-2 border-b border-border flex items-center justify-between">
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-medium text-sm">{reply.user.login}</span>
+                                            <span className="text-xs text-muted-foreground">replied</span>
+                                          </div>
+                                          <span className="text-xs text-muted-foreground">
+                                            {reply.created_at ? formatDistanceToNow(new Date(reply.created_at), { addSuffix: true }) : 'Unknown time'}
+                                          </span>
+                                        </div>
+                                        <div className="p-3">
+                                          <div className="prose prose-sm dark:prose-invert max-w-none">
+                                            <ReactMarkdown>{reply.body}</ReactMarkdown>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
                                   </div>
+                                ))}
+                                
+                                {/* Reply button and input */}
+                                <div className="mt-3">
+                                  {replyingTo !== comment.id ? (
+                                    <button
+                                      onClick={() => setReplyingTo(comment.id)}
+                                      className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 ml-4"
+                                    >
+                                      <Reply className="h-3 w-3" />
+                                      Reply
+                                    </button>
+                                  ) : (
+                                    <div className="ml-4">
+                                      <div className="border border-border rounded-lg p-3 bg-background">
+                                        <textarea
+                                          value={replyText}
+                                          onChange={(e) => setReplyText(e.target.value)}
+                                          placeholder="Write a reply..."
+                                          className="w-full px-2 py-1 text-sm border-0 bg-transparent resize-none focus:outline-none"
+                                          rows={3}
+                                          autoFocus
+                                        />
+                                        <div className="flex justify-end gap-2 mt-2">
+                                          <button
+                                            onClick={() => {
+                                              setReplyingTo(null);
+                                              setReplyText('');
+                                            }}
+                                            className="px-3 py-1 text-xs border border-border rounded hover:bg-secondary"
+                                          >
+                                            Cancel
+                                          </button>
+                                          <button
+                                            onClick={() => handleReply(comment.id)}
+                                            disabled={!replyText.trim() || isSending}
+                                            className="px-3 py-1 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50"
+                                          >
+                                            {isSending ? 'Sending...' : 'Reply'}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              ));
+            })()}
 
             {comments.length === 0 && reviews.length === 0 && !isLoading && (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
@@ -441,46 +541,6 @@ export default function CommentsTab({ task, projectId, onUpdateTask }: CommentsT
         )}
       </div>
 
-      {/* New comment input */}
-      <div className="p-4 border-t border-border">
-        <div className="space-y-2">
-          <textarea
-            value={newComment}
-            onChange={(e) => setNewComment(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                handleAddComment();
-              }
-            }}
-            placeholder="Write a comment... (Markdown supported, Cmd+Enter to send)"
-            className="w-full px-3 py-2 text-sm border rounded-md bg-background resize-none"
-            rows={3}
-            disabled={isSending}
-          />
-          <div className="flex justify-between items-center">
-            <span className="text-xs text-muted-foreground">
-              This will post to GitHub PR #{task.githubPrNumber}
-            </span>
-            <button
-              onClick={handleAddComment}
-              disabled={!newComment.trim() || isSending}
-              className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50 inline-flex items-center gap-2"
-            >
-              {isSending ? (
-                <>
-                  <RefreshCw className="h-3 w-3 animate-spin" />
-                  Sending...
-                </>
-              ) : (
-                <>
-                  <Send className="h-3 w-3" />
-                  Comment
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
