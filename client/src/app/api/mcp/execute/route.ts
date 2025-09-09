@@ -83,14 +83,19 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
       beforeFiles = new Set(getAllFiles(workspacePath));
     }
     
-    // Spawn MCP server process
+    // Spawn MCP server process with build validation configuration
     const mcpProcess = spawn('node', [mcpServerPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
         MCP_MODE: 'desktop',
         NODE_ENV: 'development',
-        WORKSPACE_PATH: workspacePath
+        WORKSPACE_PATH: workspacePath,
+        // Build validation configuration for iterative fixing (0→1 approach)
+        BUILD_VALIDATION_MAX_ATTEMPTS: '5', // Max 5 attempts to fix build errors
+        BUILD_VALIDATION_MODE: 'smart', // smart mode distinguishes warnings from errors
+        BUILD_VALIDATION_DEBUG_MODE: 'true', // Enable debug logging
+        BUILD_VALIDATION_RESTORE_ON_FAIL: 'true' // Restore original files if all attempts fail
       },
       cwd: workspacePath // Set working directory to workspace
     });

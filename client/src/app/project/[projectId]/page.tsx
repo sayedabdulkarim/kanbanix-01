@@ -1430,6 +1430,7 @@ export default function ProjectBoard() {
       <DevServerPanel
         projectId={params.projectId as string}
         projectPath={`projects/${params.projectId}`}
+        onTaskCreated={fetchProject}
       />
     </div>
   );

@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -117,6 +118,14 @@ class BuildValidator {
       
       console.log(`[Build Validator] Attempt ${attempt}/${this.maxAttempts}...`);
       
+      // Clean build cache before each attempt to prevent stale errors
+      // This ensures we don't get errors from previously generated files
+      const nextDir = path.join(projectPath, '.next');
+      if (fsSync.existsSync(nextDir)) {
+        console.log('[Build Validator] Cleaning .next directory before build attempt...');
+        await fs.rm(nextDir, { recursive: true, force: true });
+      }
+      
       // Run build and capture output
       const buildResult = await this.runBuild(projectPath);
       
@@ -140,15 +149,11 @@ class BuildValidator {
         };
       }
       
-      // Check if there are real errors worth fixing
+      // Following Micro Agent pattern: if exit code is not 0, it needs fixing
+      // No need to filter or categorize errors
       if (!buildResult.hasRealErrors) {
-        console.log('[Build Validator] Build failed but no critical errors found (exit code:', buildResult.exitCode, ')');
-        return {
-          success: true,
-          attempts: attempt,
-          exitCode: buildResult.exitCode,
-          message: 'Build completed with non-critical issues'
-        };
+        // This should rarely happen now since hasRealErrors = (exitCode !== 0)
+        console.log('[Build Validator] Unexpected state: exit code indicates failure but no errors detected');
       }
       
       console.log('[Build Validator] Build failed with real errors (exit code:', buildResult.exitCode, ')');
@@ -290,8 +295,8 @@ class BuildValidator {
         cwd: projectPath,
         env: {
           ...process.env,
-          CI: 'true',
-          FORCE_COLOR: '0'
+          NODE_ENV: 'production',  // Explicitly set to production for build
+          FORCE_COLOR: '0'  // Removed CI: 'true' to match manual build behavior
         },
         shell: true
       });
@@ -315,27 +320,12 @@ class BuildValidator {
       buildProcess.on('close', (code) => {
         clearTimeout(timeoutId);
         
-        // PRIMARY: Trust the exit code
+        // Follow Micro Agent approach: Trust the exit code completely
         const exitCodeSuccess = code === 0;
         
-        // SECONDARY: Only check for critical errors if exit code failed
-        let hasRealErrors = false;
-        if (!exitCodeSuccess) {
-          // Check for actual compilation errors (not warnings)
-          const realErrorPatterns = [
-            'Failed to compile',
-            'Module not found',
-            'Cannot find module',
-            'SyntaxError:',
-            'TypeError:',
-            'ReferenceError:',
-            'Module parse failed',
-            'Parsing error:'
-          ];
-          
-          const combinedOutput = stdout + stderr;
-          hasRealErrors = realErrorPatterns.some(pattern => combinedOutput.includes(pattern));
-        }
+        // If exit code is not 0, there are real errors - no filtering needed
+        // This matches how Micro Agent and Claude handle errors
+        let hasRealErrors = !exitCodeSuccess;
         
         resolve({
           success: exitCodeSuccess,

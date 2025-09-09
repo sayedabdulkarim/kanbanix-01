@@ -50,3 +50,7 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+
+# Project workspaces (cloned repositories for task execution)
+client/projects/
+projects/

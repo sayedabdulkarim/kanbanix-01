@@ -147,7 +147,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { projectId, taskId, executionId } = await request.json();
+    const body = await request.json();
+    const { projectId, taskId, executionId, skipValidation } = body;
     if (!projectId) {
       return NextResponse.json({ error: 'Project ID required' }, { status: 400 });
     }
@@ -315,6 +316,182 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Run build validation before starting dev server (unless skipped)
+    if (!skipValidation) {
+      console.log('Running build validation before starting dev server...');
+      
+      // Clean build artifacts before validation to ensure fresh build
+      const nextBuildDir = path.join(workspacePath, '.next');
+      const distDir = path.join(workspacePath, 'dist');
+      const buildDir = path.join(workspacePath, 'build');
+      
+      try {
+        // Remove .next folder for Next.js projects
+        await fs.rm(nextBuildDir, { recursive: true, force: true });
+        console.log('Cleaned .next build directory');
+      } catch (err) {
+        // Directory doesn't exist, which is fine
+      }
+      
+      try {
+        // Remove dist folder for Vite projects
+        await fs.rm(distDir, { recursive: true, force: true });
+        console.log('Cleaned dist build directory');
+      } catch (err) {
+        // Directory doesn't exist, which is fine
+      }
+      
+      try {
+        // Remove build folder for CRA projects
+        await fs.rm(buildDir, { recursive: true, force: true });
+        console.log('Cleaned build directory');
+      } catch (err) {
+        // Directory doesn't exist, which is fine
+      }
+      
+      // Detect project type from package.json
+      const packageJsonPath = path.join(workspacePath, 'package.json');
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+      const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+      
+      let projectType = 'unknown';
+      let buildCommand = null;
+      
+      // Determine project type and build command
+      if (deps['next']) {
+        projectType = 'nextjs';
+        // For Next.js, use 'next build' which will catch all errors
+        buildCommand = 'npm run build';
+      } else if (deps['vite']) {
+        projectType = 'vite';
+        buildCommand = 'npm run build';
+      } else if (deps['react-scripts']) {
+        projectType = 'create-react-app';
+        buildCommand = 'npm run build';
+      }
+      
+      console.log(`Detected project type: ${projectType}`);
+      
+      if (buildCommand && packageJson.scripts?.build) {
+        console.log(`Running validation with fresh build: ${buildCommand}`);
+        
+        // Collect build errors
+        const buildErrors: string[] = [];
+        let hasErrors = false;
+        
+        const buildResult = await new Promise<{ success: boolean; errors: string[] }>((resolve) => {
+          const buildProcess = spawn(buildCommand, [], {
+            cwd: workspacePath,
+            shell: true,
+            env: { 
+              ...process.env, 
+              NODE_ENV: 'production',  // Explicitly set to production for build validation
+              FORCE_COLOR: '0'  // Removed CI: 'true' to match manual build behavior
+            }
+          });
+          
+          let stdout = '';
+          let stderr = '';
+          
+          buildProcess.stdout?.on('data', (data) => {
+            const output = data.toString();
+            stdout += output;
+            console.log('[Build Validation]:', output);
+            
+            // Check for error indicators in stdout
+            if (output.includes('Error:') || 
+                output.includes('Failed to compile') ||
+                output.includes('ERROR') ||
+                output.includes('✖') ||
+                output.includes('⨯')) {
+              hasErrors = true;
+              // Extract error message
+              const lines = output.split('\n');
+              for (const line of lines) {
+                if (line.includes('Error:') || line.includes('⨯')) {
+                  buildErrors.push(line.trim());
+                }
+              }
+            }
+          });
+          
+          buildProcess.stderr?.on('data', (data) => {
+            const error = data.toString();
+            stderr += error;
+            console.error('[Build Validation Error]:', error);
+            
+            // Collect errors from stderr (excluding warnings)
+            if (!error.toLowerCase().includes('warning') && 
+                !error.toLowerCase().includes('deprecat')) {
+              hasErrors = true;
+              buildErrors.push(error.trim());
+            }
+          });
+          
+          buildProcess.on('close', (code) => {
+            console.log(`Build validation exited with code ${code}`);
+            
+            // Parse errors from combined output if we haven't caught them yet
+            if (code !== 0 && buildErrors.length === 0) {
+              const combinedOutput = stdout + stderr;
+              const lines = combinedOutput.split('\n');
+              
+              for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                if (line.includes('Error:') || 
+                    line.includes('error TS') ||
+                    line.includes('Cannot find module') ||
+                    line.includes('Module not found') ||
+                    line.includes('SyntaxError')) {
+                  // Collect this line and next few for context
+                  let errorMsg = line;
+                  for (let j = 1; j <= 3 && i + j < lines.length; j++) {
+                    if (lines[i + j].trim()) {
+                      errorMsg += '\n' + lines[i + j];
+                    }
+                  }
+                  buildErrors.push(errorMsg.trim());
+                }
+              }
+            }
+            
+            resolve({
+              success: code === 0 && !hasErrors,
+              errors: buildErrors.slice(0, 10) // Limit to 10 errors
+            });
+          });
+          
+          // Timeout after 60 seconds
+          setTimeout(() => {
+            buildProcess.kill();
+            resolve({ 
+              success: false, 
+              errors: ['Build validation timed out after 60 seconds'] 
+            });
+          }, 60000);
+        });
+        
+        if (!buildResult.success) {
+          console.log('Build validation failed, returning errors for fix task creation');
+          
+          return NextResponse.json({
+            success: false,
+            status: 'error',
+            error: 'Build validation failed - project has errors that need to be fixed',
+            buildErrors: buildResult.errors.length > 0 ? 
+              buildResult.errors : 
+              ['Build failed - check the code for syntax and type errors'],
+            projectType,
+            suggestion: 'Create a fix task to resolve these errors, or click "Skip Validation" to start anyway'
+          }, { status: 500 });
+        }
+        
+        console.log('Build validation passed!');
+      } else {
+        console.log('No build script found or validation not needed for this project type');
+      }
+    }
+    
     // Find an available port dynamically starting from default (4000)
     // This will skip the main app port and other common development ports
     const port = await findAvailablePort();
@@ -322,21 +499,21 @@ export async function POST(request: NextRequest) {
     
     console.log(`Found available port: ${port} for project ${projectId}`);
 
-    // Detect package manager
+    // Detect package manager and use proper prefix to run from correct directory
     let command = 'npm';
-    let args = ['run', 'dev'];
+    let args = ['run', 'dev', '--prefix', workspacePath];
     
     try {
       await fs.access(path.join(workspacePath, 'yarn.lock'));
       command = 'yarn';
-      args = ['dev'];
+      args = ['--cwd', workspacePath, 'dev'];
     } catch {
       try {
         await fs.access(path.join(workspacePath, 'pnpm-lock.yaml'));
         command = 'pnpm';
-        args = ['run', 'dev'];
+        args = ['run', 'dev', '--prefix', workspacePath];
       } catch {
-        // Default to npm
+        // Default to npm with --prefix flag
       }
     }
 
@@ -355,8 +532,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Start dev server process with the specific port
+    // Run from client directory since we're using --prefix/--cwd flags
     const devProcess = spawn(command, args, {
-      cwd: workspacePath,
+      cwd: process.cwd(),
       env: {
         ...process.env,
         NODE_ENV: 'development',
@@ -371,6 +549,10 @@ export async function POST(request: NextRequest) {
     });
 
     // Store server info
+    // Collect errors for potential fixing
+    const collectedErrors: string[] = [];
+    let hasFailure = false;
+    
     const serverInfo = {
       process: devProcess,
       port,
@@ -378,7 +560,8 @@ export async function POST(request: NextRequest) {
       projectId,
       taskId,
       startedAt: new Date(),
-      status: 'starting' as const
+      status: 'starting' as const,
+      errors: collectedErrors
     };
     devServers.set(projectId, serverInfo);
 
@@ -386,6 +569,25 @@ export async function POST(request: NextRequest) {
     devProcess.stderr?.on('data', async (data) => {
       const error = data.toString();
       console.error(`[Dev Server Error ${projectId}]:`, error);
+      
+      // Collect errors for potential task creation
+      if (!error.toLowerCase().includes('warning') && 
+          !error.toLowerCase().includes('deprecat')) {
+        collectedErrors.push(error);
+        
+        // Check for build failure indicators
+        if (error.includes('ERROR') || 
+            error.includes('Failed') || 
+            error.includes('Error:') ||
+            error.includes('Cannot find module') ||
+            error.includes('Module not found')) {
+          hasFailure = true;
+          const server = devServers.get(projectId);
+          if (server) {
+            server.status = 'error';
+          }
+        }
+      }
       
       // Log errors if execution provided
       if (executionId && !error.includes('warning')) {
@@ -471,11 +673,27 @@ export async function POST(request: NextRequest) {
       devServers.delete(projectId);
     });
 
-    // Wait for actual port detection
+    // Wait for actual port detection with timeout
     const { port: actualPort, url: actualUrl } = await portDetectedPromise;
     
     // Get the updated server info
     const updatedServer = devServers.get(projectId);
+    
+    // Check if server failed with errors
+    if (updatedServer?.status === 'error' && collectedErrors.length > 0) {
+      // Clean up the failed server
+      devServers.delete(projectId);
+      devProcess.kill();
+      
+      return NextResponse.json({
+        success: false,
+        status: 'error',
+        error: 'Dev server failed to start due to build errors',
+        buildErrors: collectedErrors,
+        command: `${command} ${args.join(' ')}`,
+        suggestion: 'Create a fix task to resolve these errors'
+      }, { status: 500 });
+    }
 
     // Update session state with dev server info
     if (sessionState) {
@@ -496,7 +714,8 @@ export async function POST(request: NextRequest) {
       port: actualPort,
       url: actualUrl,
       command: `${command} ${args.join(' ')}`,
-      startedAt: serverInfo.startedAt
+      startedAt: serverInfo.startedAt,
+      errors: collectedErrors.length > 0 ? collectedErrors : undefined
     });
 
   } catch (error: any) {
