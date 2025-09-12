@@ -74,6 +74,7 @@ export const API_ENDPOINTS = {
     syncPr: api('/api/workspace/sync-pr'),
     devServer: api('/api/workspace/dev-server'),
     build: api('/api/workspace/build'),
+    openVSCode: api('/api/workspace/open-vscode'),
   },
 
   // GitHub endpoints

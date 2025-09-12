@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { ArrowLeft, Plus, Loader2, RefreshCw, GitBranch, GitCommit, GitPullRequest, ExternalLink, PowerOff } from 'lucide-react';
+import { ArrowLeft, Plus, Loader2, RefreshCw, GitBranch, GitCommit, GitPullRequest, ExternalLink, PowerOff, Code2 } from 'lucide-react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import workspaceService from '@/lib/services/workspaceService';
@@ -872,6 +872,38 @@ export default function ProjectBoard() {
     }
   };
 
+  const handleOpenInVSCode = async () => {
+    if (!project) return;
+    
+    try {
+      const response = await fetch(API_ENDPOINTS.workspace.openVSCode, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          projectId: params.projectId as string,
+          projectName: project.name,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        toast.success('Opening in VS Code...');
+      } else {
+        if (result.help) {
+          toast.error(`${result.error}: ${result.help}`);
+        } else {
+          toast.error(result.error || 'Failed to open VS Code');
+        }
+      }
+    } catch (error) {
+      console.error('Error opening VS Code:', error);
+      toast.error('Failed to open VS Code');
+    }
+  };
+
   // Phase 2: Handle Create PR functionality
   const handleCreatePR = async () => {
     if (!project) return;
@@ -1239,6 +1271,15 @@ export default function ProjectBoard() {
                   )} />
                 )}
                 {isCreatingPR ? 'Processing...' : prButtonState.text}
+              </button>
+
+              <button
+                onClick={handleOpenInVSCode}
+                className="px-4 py-2 rounded-lg border border-border hover:bg-secondary transition-colors inline-flex items-center gap-2"
+                title="Open project in VS Code"
+              >
+                <Code2 className="h-4 w-4" />
+                Open in VS Code
               </button>
               
               <button 

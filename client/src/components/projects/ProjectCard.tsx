@@ -1,11 +1,13 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { MoreVertical, Settings, Trash2 } from 'lucide-react';
+import { MoreVertical, Settings, Trash2, Code2 } from 'lucide-react';
 import { Project } from '@/types/project';
 import { cn } from '@/lib/utils/cn';
 import { useState } from 'react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import toast from 'react-hot-toast';
+import { API_ENDPOINTS } from '@/lib/config/api';
 
 interface ProjectCardProps {
   project: Project;
@@ -19,6 +21,38 @@ export default function ProjectCard({ project, onDelete, onEdit }: ProjectCardPr
 
   const handleClick = () => {
     router.push(`/project/${project.id}`);
+  };
+
+  const handleOpenInVSCode = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    try {
+      const response = await fetch(API_ENDPOINTS.workspace.openVSCode, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          projectId: project.id,
+          projectName: project.name,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        toast.success('Opening in VS Code...');
+      } else {
+        if (result.help) {
+          toast.error(`${result.error}: ${result.help}`);
+        } else {
+          toast.error(result.error || 'Failed to open VS Code');
+        }
+      }
+    } catch (error) {
+      console.error('Error opening VS Code:', error);
+      toast.error('Failed to open VS Code');
+    }
   };
 
   const getTimeAgo = (date: Date) => {
@@ -70,6 +104,16 @@ export default function ProjectCard({ project, onDelete, onEdit }: ProjectCardPr
                 className="min-w-[160px] bg-card rounded-lg p-1 shadow-lg border border-border"
                 sideOffset={5}
               >
+                <DropdownMenu.Item
+                  className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-secondary rounded-md outline-none"
+                  onClick={handleOpenInVSCode}
+                >
+                  <Code2 className="h-4 w-4" />
+                  Open in VS Code
+                </DropdownMenu.Item>
+
+                <DropdownMenu.Separator className="h-[1px] bg-border my-1" />
+                
                 <DropdownMenu.Item
                   className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-secondary rounded-md outline-none"
                   onClick={(e) => {

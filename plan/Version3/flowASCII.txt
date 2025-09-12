@@ -1,0 +1,243 @@
+# Kanbanix V3 - Incremental Code Generation Flow
+
+## Complete System Flow with 3 Example Tasks
+
+### 1. Dashboard to Kanban Board
+
+```
++----------------------------------+
+|       KANBANIX DASHBOARD         |
++----------------------------------+
+|  [Project A]  [Project B]  [+]   |
+|   Django      Next.js            |
++----------------------------------+
+         |
+         v
++----------------------------------+
+|      PROJECT KANBAN BOARD        |
++----------------------------------+
+| TODO | IN PROGRESS | REVIEW | DONE |
+|------|-------------|--------|------|
+| Task1|             |        |      |
+| Task2|             |        |      |
+| Task3|             |        |      |
++----------------------------------+
+```
+
+### 2. Task 1: Counter App Execution
+
+```
+USER DRAGS TASK 1 TO IN PROGRESS
+            |
+            v
++----------------------------------+
+| STEP 1: LOAD PROJECT CONTEXT     |
++----------------------------------+
+| - Project type: Next.js          |
+| - Has 15 files                   |
+| - No previous tasks              |
+| - No backend detected            |
++----------------------------------+
+            |
+            v
++----------------------------------+
+| STEP 2: TASK DECOMPOSITION       |
++----------------------------------+
+| 1. Create Counter component      |
+| 2. Add increment/decrement       |
+| 3. Style with Tailwind           |
+| 4. Add to main page              |
+| 5. Test build                    |
++----------------------------------+
+            |
+            v
++----------------------------------+
+| STEP 3: CODE GENERATION          |
++----------------------------------+
+| CREATE: components/Counter.tsx   |
+| UPDATE: app/page.tsx             |
+| LOG: Following Tailwind patterns |
++----------------------------------+
+            |
+            v
++----------------------------------+
+| STEP 4: BUILD & ERROR RECOVERY   |
++----------------------------------+
+| ERROR: Missing useState import   |
+| FIX: Auto-add import             |
+| RETRY: Build successful!         |
++----------------------------------+
+            |
+            v
++----------------------------------+
+| STEP 5: SAVE CONTEXT & COMMIT    |
++----------------------------------+
+| ProjectContext saved             |
+| Git commit: "Add counter"        |
+| Task 1 -> IN REVIEW              |
++----------------------------------+
+```
+
+### 3. Task 2: TODO App with Backend
+
+```
+USER DRAGS TASK 2 TO IN PROGRESS
+            |
+            v
++----------------------------------+
+| STEP 1: LOAD CONTEXT (MEMORY!)   |
++----------------------------------+
+| - Has Counter component          |
+| - 16 files now                   |
+| - Previous task history loaded   |
++----------------------------------+
+            |
+            v
++----------------------------------+
+| STEP 2: BACKEND DETECTION        |
++----------------------------------+
+| Checking for backends:           |
+| - Express: NOT FOUND             |
+| - Next API: NOT FOUND            |
+| - Prisma: NOT FOUND              |
+| Decision: Create Next.js API     |
++----------------------------------+
+            |
+            v
++----------------------------------+
+| STEP 3: COMPLEX DECOMPOSITION    |
++----------------------------------+
+| 1. Install Prisma                |
+| 2. Create Todo model             |
+| 3. Generate Prisma client        |
+| 4. Create API routes             |
+| 5. Create TodoList component     |
+| 6. Create TodoItem component     |
+| 7. Wire frontend to API          |
+| 8. Add to page (preserve Counter)|
+| 9. Test build and API            |
++----------------------------------+
+            |
+            v
++----------------------------------+
+| STEP 4: INCREMENTAL GENERATION   |
++----------------------------------+
+| Database Setup:                  |
+| - npm install prisma             |
+| - CREATE: prisma/schema.prisma   |
+| - CREATE: .env.local             |
+|                                  |
+| API Routes:                      |
+| - CREATE: app/api/todos/route.ts |
+|                                  |
+| Frontend:                        |
+| - CREATE: components/TodoList    |
+| - UPDATE: app/page.tsx           |
+| - PRESERVE: Counter unchanged!   |
++----------------------------------+
+            |
+            v
++----------------------------------+
+| STEP 5: BUILD WITH REFLECTION    |
++----------------------------------+
+| ERROR: Module @prisma/client     |
+| FIX: Run prisma generate         |
+| TEST: API endpoints working      |
+| SUCCESS: All tests passed!       |
++----------------------------------+
+            |
+            v
++----------------------------------+
+| STEP 6: UPDATE CONTEXT           |
++----------------------------------+
+| Backend info saved               |
+| Task history updated             |
+| Git commit: "Add TODO backend"   |
+| Task 2 -> IN REVIEW              |
++----------------------------------+
+```
+
+### 4. Task 3: Add Reset Button
+
+```
+USER DRAGS TASK 3 TO IN PROGRESS
+            |
+            v
++----------------------------------+
+| STEP 1: INTELLIGENT ANALYSIS     |
++----------------------------------+
+| Task: "Add reset button"         |
+|                                  |
+| AI REASONING:                    |
+| - Found Counter (has state)      |
+| - Found TODO (has database)      |
+| - "Reset" fits Counter better    |
+| Decision: Add to Counter         |
++----------------------------------+
+            |
+            v
++----------------------------------+
+| STEP 2: TARGETED MODIFICATION    |
++----------------------------------+
+| READ: components/Counter.tsx     |
+| ADD: reset function              |
+| ADD: reset button                |
+| PRESERVE: TODO unchanged         |
++----------------------------------+
+            |
+            v
++----------------------------------+
+| STEP 3: FINAL STATE              |
++----------------------------------+
+| Project structure:               |
+| - Counter (with reset)           |
+| - TODO app (with backend)        |
+| - All integrated                 |
+|                                  |
+| Git commit: "Add reset button"   |
+| Task 3 -> IN REVIEW              |
++----------------------------------+
+```
+
+## Key Improvements in V3
+
+### Context Persistence
+- Each task loads previous work
+- No overwrites, only additions
+- Memory across tasks
+
+### Backend Detection
+- Checks for existing backends
+- Creates appropriate type
+- No duplicates
+
+### Intelligent Reasoning
+- AI analyzes context
+- Makes logical decisions
+- Knows where to add features
+
+### Error Recovery
+- Automatic fixes
+- Reflection loops
+- Self-healing builds
+
+### Detailed Logging
+```
+[CONTEXT] - State management
+[BACKEND] - Detection/creation
+[DECOMPOSE] - Task breakdown
+[GENERATE] - Code generation
+[PRESERVE] - Code protection
+[BUILD] - Validation
+[FIX] - Auto-repairs
+[TEST] - Testing
+[GIT] - Version control
+[AI] - Reasoning
+```
+
+### Incremental Results
+- Task 1: 16 files (Counter added)
+- Task 2: 25+ files (TODO + backend added)
+- Task 3: Same files (Counter modified)
+
+Each task BUILDS on previous work!
