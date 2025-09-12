@@ -237,17 +237,29 @@ function Dashboard() {
   };
 
   const handleDeleteProject = async (id: string) => {
-    if (confirm('Are you sure you want to delete this project?')) {
+    const confirmMessage = 
+      'Are you sure you want to delete this project?\n\n' +
+      '⚠️ This will permanently delete:\n' +
+      '• All tasks and comments\n' +
+      '• All workspace files and code\n' +
+      '• All session history\n\n' +
+      'This action cannot be undone.';
+    
+    if (confirm(confirmMessage)) {
       try {
         const response = await apiFetch(`${API_ENDPOINTS.projects.list}?id=${id}`, {
           method: 'DELETE',
         });
         
         if (response.ok) {
+          toast.success('Project and workspace deleted successfully');
           await fetchProjects();
+        } else {
+          toast.error('Failed to delete project');
         }
       } catch (error) {
         console.error('Error deleting project:', error);
+        toast.error('An error occurred while deleting the project');
       }
     }
   };

@@ -3,6 +3,8 @@ import { getServerSession } from 'next-auth';
 import { PrismaClient } from '@prisma/client';
 import { Octokit } from '@octokit/rest';
 import { authOptions } from '../auth/[...nextauth]/route';
+import { promises as fs } from 'fs';
+import path from 'path';
 
 const prisma = new PrismaClient({
   datasources: {
@@ -204,6 +206,24 @@ export async function DELETE(request: NextRequest) {
 
     if (!project) {
       return NextResponse.json({ error: 'Project not found or unauthorized' }, { status: 404 });
+    }
+
+    // Clean up workspace files before deleting from database
+    try {
+      // Projects are always stored in client/projects/
+      const projectPath = path.join(process.cwd(), 'projects', projectId);
+      
+      try {
+        await fs.access(projectPath);
+        await fs.rm(projectPath, { recursive: true, force: true });
+        console.log(`Cleaned up project folder at ${projectPath}`);
+      } catch (error) {
+        console.log(`No project folder found at ${projectPath}, skipping cleanup`);
+      }
+    } catch (error) {
+      // Log error but don't fail the deletion
+      console.error(`Failed to clean up workspace for project ${projectId}:`, error);
+      // Continue with database deletion even if filesystem cleanup fails
     }
 
     // Delete the project (cascade will handle related records)
