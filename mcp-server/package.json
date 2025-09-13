@@ -16,8 +16,10 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.60.0",
     "@modelcontextprotocol/sdk": "^0.6.0",
+    "@prisma/client": "^6.16.1",
     "dotenv": "^17.2.1",
     "glob": "^10.3.10",
+    "prisma": "^6.16.1",
     "simple-git": "^3.20.0"
   },
   "devDependencies": {

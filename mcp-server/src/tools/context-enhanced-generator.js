@@ -217,15 +217,38 @@ Return ONLY valid JSON, no markdown or explanations.`;
 
       console.log('[Context-Enhanced] Calling Claude API with enhanced context...');
       
-      const message = await anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 4096,
-        temperature: 0.7,
-        messages: [{
-          role: 'user',
-          content: prompt
-        }]
-      });
+      // Retry logic for handling overload
+      let message;
+      let retries = 3;
+      let delay = 2000; // Start with 2 second delay
+      
+      while (retries > 0) {
+        try {
+          message = await anthropic.messages.create({
+            model: 'claude-3-5-sonnet-latest',  // This should map to Sonnet 4
+            max_tokens: 4096,
+            temperature: 0.7,
+            messages: [{
+              role: 'user',
+              content: prompt
+            }]
+          });
+          break; // Success, exit loop
+        } catch (error) {
+          if (error.status === 529 && retries > 1) {
+            console.log(`[Context-Enhanced] API overloaded, retrying in ${delay}ms... (${retries - 1} retries left)`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay *= 2; // Exponential backoff (2s, 4s, 8s)
+            retries--;
+          } else {
+            throw error; // Re-throw if not overload or no retries left
+          }
+        }
+      }
+      
+      if (!message) {
+        throw new Error('Failed to get response from Claude after retries');
+      }
       
       // Parse response
       const responseText = message.content[0].text;
@@ -249,6 +272,53 @@ Return ONLY valid JSON, no markdown or explanations.`;
         }
       }
       
+      // Write files to disk
+      const changes = [];
+      if (generatedCode.files && workspace_path) {
+        console.log(`[Context-Enhanced] Writing ${Object.keys(generatedCode.files).length} files to disk...`);
+        
+        for (const [filePath, content] of Object.entries(generatedCode.files)) {
+          const fullPath = path.join(workspace_path, filePath);
+          const dir = path.dirname(fullPath);
+          
+          // Create directory if it doesn't exist
+          await fs.mkdir(dir, { recursive: true });
+          
+          // Check if file exists
+          const exists = await fs.access(fullPath).then(() => true).catch(() => false);
+          
+          // Write the file
+          await fs.writeFile(fullPath, content, 'utf-8');
+          console.log(`[Context-Enhanced] Wrote file: ${filePath}`);
+          
+          changes.push({
+            path: filePath,
+            type: exists ? 'modified' : 'created'
+          });
+        }
+      }
+      
+      // Install dependencies if needed
+      if (generatedCode.dependencies && generatedCode.dependencies.length > 0 && workspace_path) {
+        console.log(`[Context-Enhanced] Installing dependencies: ${generatedCode.dependencies.join(', ')}`);
+        const { execSync } = await import('child_process');
+        
+        try {
+          // Check if yarn.lock exists
+          const useYarn = await fs.access(path.join(workspace_path, 'yarn.lock')).then(() => true).catch(() => false);
+          const cmd = useYarn ? 'yarn add' : 'npm install';
+          
+          execSync(`${cmd} ${generatedCode.dependencies.join(' ')}`, {
+            cwd: workspace_path,
+            stdio: 'inherit'
+          });
+          
+          console.log('[Context-Enhanced] Dependencies installed successfully');
+        } catch (error) {
+          console.error('[Context-Enhanced] Failed to install dependencies:', error.message);
+        }
+      }
+      
       // Update project context with this task
       if (project_id && generatedCode) {
         await updateProjectContextAfterTask(project_id, {
@@ -263,6 +333,7 @@ Return ONLY valid JSON, no markdown or explanations.`;
       return {
         success: true,
         ...generatedCode,
+        changes: changes,
         context_aware: true,
         context_used: {
           project_type: projectContext?.projectType,
@@ -335,8 +406,13 @@ async function detectAffectedFiles(taskTitle, projectFiles, context) {
 async function updateProjectContextAfterTask(projectId, taskResult) {
   try {
     const { PrismaClient } = await import('@prisma/client');
+    const dbPath = path.join(__dirname, '../../../client/prisma/dev.db');
     const prisma = new PrismaClient({
-      datasourceUrl: `file:${path.join(__dirname, '../../../client/prisma/prisma/dev.db')}`
+      datasources: {
+        db: {
+          url: `file:${dbPath}`
+        }
+      }
     });
     
     // Get existing context

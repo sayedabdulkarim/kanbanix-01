@@ -12,8 +12,13 @@ async function getProjectContext(projectId) {
   try {
     // For now, read directly from SQLite database
     const { PrismaClient } = await import('@prisma/client');
+    const dbPath = path.join(__dirname, '../../../client/prisma/dev.db');
     const prisma = new PrismaClient({
-      datasourceUrl: `file:${path.join(__dirname, '../../../client/prisma/prisma/dev.db')}`
+      datasources: {
+        db: {
+          url: `file:${dbPath}`
+        }
+      }
     });
     
     const context = await prisma.projectContext.findUnique({
@@ -494,8 +499,13 @@ async function detectProjectType(workspacePath) {
 async function updateProjectContext(projectId, updates) {
   try {
     const { PrismaClient } = await import('@prisma/client');
+    const dbPath = path.join(__dirname, '../../../client/prisma/dev.db');
     const prisma = new PrismaClient({
-      datasourceUrl: `file:${path.join(__dirname, '../../../client/prisma/prisma/dev.db')}`
+      datasources: {
+        db: {
+          url: `file:${dbPath}`
+        }
+      }
     });
     
     await prisma.projectContext.upsert({

@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
       projectId, 
       message, 
       attachedFiles = [],
-      context 
+      
     } = body;
 
     if (!taskId || !projectId || !message) {
@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
     const workspacePath = path.join(process.cwd(), 'projects', projectId);
 
     // Read attached files if any
-    let fileContents: { path: string; content: string }[] = [];
+    const fileContents: { path: string; content: string }[] = [];
     if (attachedFiles.length > 0) {
       for (const filePath of attachedFiles) {
         try {
@@ -124,7 +124,7 @@ export async function POST(request: NextRequest) {
       });
 
       // Track the new diffs - fix the path extraction
-      const changedFilePaths = aiResponse.changes.map((change: any) => 
+      const changedFilePaths = aiResponse.changes.map((change: { path?: string; filePath?: string }) => 
         change.path ? change.path.replace(/^\//, '') : change.filePath || ''
       ).filter((path: string) => path);
       
@@ -163,11 +163,11 @@ export async function POST(request: NextRequest) {
       diffs: newDiffs
     });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Chat API error:', error);
     return NextResponse.json({
       error: 'Failed to process chat message',
-      details: error.message
+      details: error instanceof Error ? error.message : 'Unknown error'
     }, { status: 500 });
   }
 }

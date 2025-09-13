@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Add workspace path to params if projectId is provided
-    let enhancedParams = { ...params };
+    const enhancedParams = { ...params };
     if (params.projectId) {
       enhancedParams.workspacePath = params.workspacePath || path.join(process.cwd(), 'projects', params.projectId);
     }
