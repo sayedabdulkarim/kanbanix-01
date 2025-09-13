@@ -411,50 +411,89 @@ class IterativeRefinement {
 }
 ```
 
-### 4. Version Control Integration
+### 4. Version Control Integration (Existing - No Changes Needed)
 
-#### 4.1 Granular Commit Strategy
+#### 4.1 Current Manual Commit Strategy (Keep As-Is)
+
+**IMPORTANT**: The existing commit/PR workflow is correct and should NOT be changed. Users maintain full control over when to commit and create PRs.
 
 ```javascript
+// CURRENT IMPLEMENTATION - DO NOT CHANGE
 class GitIntegration {
-  async executeWithVersionControl(subtasks, projectId) {
-    const session = await this.createSession(projectId);
+  async executeTask(subtasks, projectId) {
+    const changedFiles = [];
     
     for (const subtask of subtasks) {
       try {
-        // Execute subtask
+        // Execute subtask - generates code
         const result = await this.executeSubtask(subtask);
         
-        // Commit immediately
-        await git.add(result.files);
-        await git.commit({
-          message: `feat(${subtask.category}): ${subtask.name}`,
-          body: `Files changed: ${result.files.join(', ')}`
-        });
+        // Track changed files (but DO NOT auto-commit)
+        changedFiles.push(...result.files);
         
-        // Update progress
-        await this.updateSessionProgress(session, subtask);
+        // Update task progress
+        await this.updateTaskProgress(subtask);
         
       } catch (error) {
-        // Rollback on failure
-        await git.reset('--hard', 'HEAD');
+        // Rollback uncommitted changes on failure
+        await git.checkout('--', '.');
         throw new Error(`Subtask failed: ${subtask.name}`);
       }
     }
     
-    // Create PR when all subtasks complete
-    await this.createPullRequest(session);
+    // Move task to IN REVIEW state with uncommitted changes
+    await this.moveTaskToReview({
+      changedFiles,
+      status: 'Code generated successfully. Ready for review.'
+    });
+    
+    // User manually decides when to:
+    // 1. Review and test changes
+    // 2. Click "Commit All" button
+    // 3. Provide commit message via modal
+    // 4. Click "Create PR" button (after committing)
   }
 }
 ```
 
-#### 4.2 Branch Strategy
+#### 4.2 Existing Workflow (No Changes Required)
 
+```yaml
+Current Task Flow:
+  1. TODO → User drags to In Progress
+  2. IN_PROGRESS → AI generates code (uncommitted)
+  3. IN_REVIEW → Code ready, user reviews
+  4. User Actions (all manual):
+     - Review generated code
+     - Test the application  
+     - Click "Commit All" → Enter message → Commit
+     - Click "Create PR" → Push to GitHub → Open PR
+  5. DONE → Task completed
+
+Key Points:
+  - NO automatic commits
+  - NO automatic PR creation
+  - NO automatic branch creation
+  - User has full control at every step
 ```
-main
-  ├── session/task-1-boilerplate
-  ├── session/task-2-todo-feature
-  └── session/task-3-authentication
+
+#### 4.3 What V3 Changes vs What Stays Same
+
+```yaml
+What Changes in V3:
+  - Add context persistence between tasks
+  - Improve file detection
+  - Add backend detection
+  - Implement task decomposition
+  - Add reflection loops for error recovery
+
+What Stays the Same:
+  - Manual commit workflow (user clicks "Commit All")
+  - Manual PR creation (user clicks "Create PR")
+  - User controls branch management
+  - Review state before committing
+  - Existing /api/workspace/commit endpoint
+  - Existing /api/workspace/pr endpoint
 ```
 
 ## Implementation Phases
