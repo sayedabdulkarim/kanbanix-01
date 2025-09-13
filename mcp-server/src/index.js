@@ -31,6 +31,8 @@ import { apiTools } from './tools/api-tools.js';
 import { githubAwareTools } from './tools/github-aware-tools.js';
 import { testTools } from './tools/test-tools.js';
 import { smartFileDetectorTools } from './tools/smart-file-detector.js';
+import { contextAwareTools } from './tools/context-aware-tools.js';
+import { contextEnhancedGenerator } from './tools/context-enhanced-generator.js';
 
 // Combine all tools
 const allTools = [
@@ -42,6 +44,8 @@ const allTools = [
   ...githubAwareTools,
   ...testTools,
   ...smartFileDetectorTools,
+  ...contextAwareTools,
+  ...contextEnhancedGenerator,
 ];
 
 // Create server instance

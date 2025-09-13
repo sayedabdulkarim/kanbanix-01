@@ -95,6 +95,7 @@ model Project {
   tasks         Task[]
   webhooks      Webhook[]
   sessionStates SessionState[]
+  context       ProjectContext?
   
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -364,4 +365,41 @@ model SessionState {
   @@index([projectId])
   @@index([userId])
   @@index([sessionBranch])
+}
+
+// V3: Project context for incremental code generation
+model ProjectContext {
+  id            String   @id @default(cuid())
+  projectId     String   @unique
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  // File system state
+  fileTree      String?  // JSON: Current file structure and metadata
+  fileContents  String?  // JSON: Key files content cache
+  
+  // Project metadata  
+  projectType   String?  // nextjs, react, vue, angular, django, rails, laravel, spring, flutter, etc.
+  dependencies  String?  // JSON: Installed packages from package.json, requirements.txt, etc.
+  apiEndpoints  String?  // JSON: Existing API routes detected
+  components    String?  // JSON: UI components created
+  database      String?  // JSON: Schema and models
+  
+  // Backend detection
+  backendType   String?  // express, nextjs-api, django, flask, rails, etc.
+  backendFiles  String?  // JSON: List of backend-related files
+  ormType       String?  // prisma, mongoose, sequelize, sqlalchemy, etc.
+  
+  // Task history
+  taskHistory   String?  // JSON: Previous tasks and their outputs
+  lastSnapshot  String?  // Full project state backup
+  
+  // Learning from project
+  codePatterns  String?  // JSON: Detected code patterns and conventions
+  importMap     String?  // JSON: Common imports and their usage
+  testingSetup  String?  // JSON: Test framework and patterns
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([projectId])
 }
