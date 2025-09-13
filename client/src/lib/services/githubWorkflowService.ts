@@ -44,6 +44,12 @@ export class GitHubWorkflowService {
         `git clone https://github.com/${owner}/${repo}.git .`,
         { cwd: projectPath }
       );
+      
+      // Remove .git folder to prevent nested git repository issues
+      // This ensures the cloned project doesn't interfere with the main Kanbanix repo
+      console.log('Removing .git folder from cloned project...');
+      await fs.rm(path.join(projectPath, '.git'), { recursive: true, force: true });
+      
       return projectPath;
     }
   }

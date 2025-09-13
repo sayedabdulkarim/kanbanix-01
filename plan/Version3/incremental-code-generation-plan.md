@@ -12,6 +12,14 @@ The current Kanbanix AI code generation has critical limitations:
 - **Overwriting Instead of Updating**: New tasks replace rather than extend existing code
 - **Incomplete Implementation**: Tasks like "TODO with backend" only generate frontend components
 
+## Important Architecture Decisions
+
+### Workspace Isolation
+- **Cloned projects are isolated from main Kanbanix repository**
+- `.git` folders are removed from cloned projects to prevent nested git issues
+- All generated code goes to `client/projects/` which is gitignored
+- This ensures user project changes don't pollute the main Kanbanix codebase
+
 ## Proposed Solution Architecture
 
 ### 1. Context Management with Memory System
