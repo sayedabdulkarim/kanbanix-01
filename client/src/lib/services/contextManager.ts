@@ -1,7 +1,6 @@
 import { PrismaClient, ProjectContext } from '@prisma/client';
-import path from 'path';
-import fs from 'fs/promises';
-import { glob } from 'glob';
+import * as path from 'path';
+import * as fs from 'fs/promises';
 
 const prisma = new PrismaClient();
 
@@ -257,10 +256,25 @@ class ContextManager {
     for (const apiPath of nextApiPaths) {
       const fullPath = path.join(projectPath, apiPath);
       if (await this.fileExists(fullPath)) {
-        const apiFiles = await glob('**/*.{ts,tsx,js,jsx}', {
-          cwd: fullPath,
-          nodir: true
-        });
+        // Find API files recursively
+        const apiFiles: string[] = [];
+        const findApiFiles = async (dir: string) => {
+          try {
+            const entries = await fs.readdir(dir, { withFileTypes: true });
+            for (const entry of entries) {
+              const entryPath = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                await findApiFiles(entryPath);
+              } else if (entry.isFile() && 
+                        ['.ts', '.tsx', '.js', '.jsx'].includes(path.extname(entry.name))) {
+                apiFiles.push(path.relative(fullPath, entryPath));
+              }
+            }
+          } catch (e) {
+            // Ignore errors
+          }
+        };
+        await findApiFiles(fullPath);
         backendFiles.push(...apiFiles.map(f => path.join(apiPath, f)));
         backendType = 'nextjs-api';
         break;
@@ -361,7 +375,7 @@ class ContextManager {
       backendType: context?.backendType || null,
       hasDatabase: !!context?.ormType,
       databaseType: context?.ormType || null,
-      mainTechnologies: [...new Set(mainTechnologies)],
+      mainTechnologies: Array.from(new Set(mainTechnologies)),
       recentTasks: taskHistory.slice(-5)
     };
   }
@@ -466,32 +480,50 @@ class ContextManager {
     projectPath: string,
     keywords: string[]
   ): Promise<string[]> {
-    const matchingFiles: Set<string> = new Set();
-
-    // Search for code files
-    const codeFiles = await glob('**/*.{ts,tsx,js,jsx,py,java,go,rs,rb,php}', {
-      cwd: projectPath,
-      nodir: true,
-      ignore: ['**/node_modules/**', '**/dist/**', '**/build/**']
-    });
-
-    for (const file of codeFiles) {
+    const matchingFiles: string[] = [];
+    
+    // Recursively search for files
+    const searchDir = async (dir: string, base: string) => {
       try {
-        const content = await fs.readFile(path.join(projectPath, file), 'utf-8');
-        const lowerContent = content.toLowerCase();
+        const entries = await fs.readdir(dir, { withFileTypes: true });
         
-        for (const keyword of keywords) {
-          if (lowerContent.includes(keyword)) {
-            matchingFiles.add(file);
-            break;
+        for (const entry of entries) {
+          // Skip common directories
+          if (['node_modules', '.git', 'dist', 'build', '.next'].includes(entry.name)) {
+            continue;
+          }
+          
+          const fullPath = path.join(dir, entry.name);
+          
+          if (entry.isDirectory()) {
+            await searchDir(fullPath, base);
+          } else if (entry.isFile()) {
+            // Check if it's a code file
+            const ext = path.extname(entry.name);
+            if (['.ts', '.tsx', '.js', '.jsx', '.py', '.java', '.go', '.rs', '.rb', '.php'].includes(ext)) {
+              try {
+                const content = await fs.readFile(fullPath, 'utf-8');
+                const lowerContent = content.toLowerCase();
+                
+                for (const keyword of keywords) {
+                  if (lowerContent.includes(keyword)) {
+                    matchingFiles.push(path.relative(base, fullPath));
+                    break;
+                  }
+                }
+              } catch (e) {
+                // Skip files that can't be read
+              }
+            }
           }
         }
       } catch (e) {
-        // Skip files that can't be read
+        // Skip directories that can't be read
       }
-    }
-
-    return Array.from(matchingFiles);
+    };
+    
+    await searchDir(projectPath, projectPath);
+    return matchingFiles;
   }
 
   /**
