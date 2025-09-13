@@ -661,6 +661,27 @@ export async function POST(request: NextRequest) {
       console.error('⚠️ WARNING: SessionState not created/updated - PR button will not work!');
     }
 
+    // Scan project context for incremental generation (Phase 1)
+    try {
+      console.log('[Context] Scanning project structure for context...');
+      const scanResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'}/api/workspace/scan-context`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': request.headers.get('cookie') || ''
+        },
+        body: JSON.stringify({ projectId })
+      });
+      
+      if (scanResponse.ok) {
+        const scanResult = await scanResponse.json();
+        console.log(`[Context] Project scanned: ${scanResult.structure?.projectType || 'unknown'} type detected`);
+      }
+    } catch (scanError) {
+      console.log('[Context] Could not scan project context:', scanError);
+      // Don't fail workspace enter if context scan fails
+    }
+
     // Release lock on success
     workspaceLocks.delete(projectId);
 

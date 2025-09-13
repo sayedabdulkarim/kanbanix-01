@@ -414,13 +414,14 @@ export class AIAgentService {
       devServerRunning: sessionState?.devServerStarted || false
     };
     
-    // Call MCP server (or Claude API based on mode)
-    const mcpResult = await this.callMCPTool('generate_task_code', {
+    // Call MCP server with context-enhanced generator
+    const mcpResult = await this.callMCPTool('generate_code_with_context', {
       task_title: input.title,
       task_description: input.description,
+      project_id: execution.task.projectId, // For context lookup
+      workspace_path: input.context.workspacePath || `/tmp/workspace/${execution.task.projectId}`,
       context: enhancedContext,
-      projectId: execution.task.projectId,
-      workspacePath: input.context.workspacePath || `/tmp/workspace/${execution.task.projectId}`
+      executionId
     }, executionId);
 
     await this.updateProgress(executionId, 80, 'Processing generated code');
@@ -560,13 +561,13 @@ export class AIAgentService {
       devServerRunning: sessionState?.devServerStarted || false
     };
     
-    // Use generate_task_code tool instead of non-existent fix_bug
-    const mcpResult = await this.callMCPTool('generate_task_code', {
+    // Use context-enhanced generator for bug fixes
+    const mcpResult = await this.callMCPTool('generate_code_with_context', {
       task_title: input.title,
       task_description: input.description || `Fix: ${input.title}`,
+      project_id: execution.task.projectId,
+      workspace_path: input.context.workspacePath || `/tmp/workspace/${execution.task.projectId}`,
       context: enhancedContext,
-      projectId: execution.task.projectId,
-      workspacePath: input.context.workspacePath || `/tmp/workspace/${execution.task.projectId}`,
       executionId
     }, executionId);
 
@@ -946,13 +947,13 @@ export class AIAgentService {
         isFollowUp: true
       };
 
-      // Call MCP tool for follow-up changes
-      const result = await this.callMCPTool('generate_task_code', {
+      // Call MCP tool for follow-up changes with context
+      const result = await this.callMCPTool('generate_code_with_context', {
         task_title: `Follow-up: ${context.taskTitle}`,
         task_description: message,
+        project_id: projectId,
+        workspace_path: context.workspacePath,
         context: aiContext,
-        projectId,
-        workspacePath: context.workspacePath,
         isFollowUp: true
       });
 
