@@ -1,6 +1,8 @@
 // Kanbanix AI Agent Service - Adapted from SynthAI with MCP Integration
 import { PrismaClient } from '@prisma/client';
 import path from 'path';
+import { SubtaskExecutor } from './subtaskExecutor';
+import { ContextManager } from './contextManager';
 
 // Agent Types based on KANBANIX_AI_WORKFLOW_SPEC
 export enum AgentType {
@@ -108,10 +110,14 @@ class AIAgentServiceError extends Error {
 export class AIAgentService {
   private prisma: PrismaClient;
   private mcpMode: 'desktop' | 'api';
+  private subtaskExecutor: SubtaskExecutor;
+  private contextManager: ContextManager;
 
   constructor() {
     this.prisma = new PrismaClient();
     this.mcpMode = (process.env.MCP_MODE as 'desktop' | 'api') || 'desktop';
+    this.subtaskExecutor = new SubtaskExecutor();
+    this.contextManager = new ContextManager();
   }
 
   // Main entry point - Execute task with appropriate agent
@@ -382,6 +388,9 @@ export class AIAgentService {
     
     const input = JSON.parse(execution.input);
     
+    // Check if task should use decomposition (Phase 2 feature)
+    const useDecomposition = this.shouldUseDecomposition(input.title, input.description);
+    
     await this.updateProgress(executionId, 20, 'Preparing workspace');
     
     // V2: Use session branch instead of creating task-specific branches
@@ -414,7 +423,41 @@ export class AIAgentService {
       devServerRunning: sessionState?.devServerStarted || false
     };
     
-    // Call MCP server with context-enhanced generator
+    // Phase 2: Use decomposition for complex tasks
+    if (useDecomposition) {
+      await this.addExecutionLog(executionId, 'info', '🔄 Using task decomposition for complex task');
+      await this.updateProgress(executionId, 35, 'Decomposing task into subtasks');
+      
+      // Execute with SubtaskExecutor
+      const results = await this.subtaskExecutor.executeTask(
+        execution.taskId,
+        input.title,
+        input.description,
+        execution.task.projectId,
+        input.context.workspacePath || `/tmp/workspace/${execution.task.projectId}`,
+        (progress) => {
+          // Update progress callback
+          this.addExecutionLog(executionId, 'info', progress.message || '');
+          this.updateProgress(executionId, 35 + (progress.progress * 0.5), progress.message || '');
+        }
+      );
+      
+      // Aggregate results
+      const mcpResult = {
+        success: results.filter(r => r.success).length > 0,
+        files: {},
+        changes: results.flatMap(r => [
+          ...r.filesCreated.map(f => ({ path: f, type: 'created' })),
+          ...r.filesModified.map(f => ({ path: f, type: 'modified' }))
+        ]),
+        summary: `Completed ${results.filter(r => r.success).length}/${results.length} subtasks`
+      };
+      
+      await this.updateProgress(executionId, 85, 'Processing decomposed results');
+      return mcpResult;
+    }
+    
+    // Original single-shot generation (Phase 1)
     const mcpResult = await this.callMCPTool('generate_code_with_context', {
       task_title: input.title,
       task_description: input.description,
@@ -984,5 +1027,39 @@ export class AIAgentService {
         changes: []
       };
     }
+  }
+
+  /**
+   * Determine if a task should use decomposition based on complexity
+   * Phase 2 feature - enables breaking down complex tasks
+   */
+  private shouldUseDecomposition(title: string, description: string): boolean {
+    const taskText = `${title} ${description}`.toLowerCase();
+    
+    // Complex task indicators
+    const complexIndicators = [
+      'todo with backend',
+      'crud',
+      'authentication',
+      'full stack',
+      'api and frontend',
+      'database',
+      'multiple features',
+      'complex'
+    ];
+    
+    // Check for complexity indicators
+    const hasComplexIndicator = complexIndicators.some(indicator => 
+      taskText.includes(indicator)
+    );
+    
+    // Check for multiple operations
+    const hasMultipleOperations = 
+      (taskText.includes('create') && taskText.includes('update')) ||
+      (taskText.includes('frontend') && taskText.includes('backend')) ||
+      (taskText.includes('api') && taskText.includes('ui'));
+    
+    // Enable decomposition for complex tasks
+    return hasComplexIndicator || hasMultipleOperations;
   }
 }

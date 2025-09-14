@@ -24,7 +24,7 @@ interface ProjectSummary {
   recentTasks: any[];
 }
 
-class ContextManager {
+export class ContextManager {
   private workspacePath: string;
 
   constructor() {

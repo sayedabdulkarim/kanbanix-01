@@ -287,8 +287,9 @@ Return ONLY valid JSON, no markdown or explanations.`;
           // Check if file exists
           const exists = await fs.access(fullPath).then(() => true).catch(() => false);
           
-          // Write the file
-          await fs.writeFile(fullPath, content, 'utf-8');
+          // Write the file - ensure content is a string
+          const fileContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+          await fs.writeFile(fullPath, fileContent, 'utf-8');
           console.log(`[Context-Enhanced] Wrote file: ${filePath}`);
           
           changes.push({

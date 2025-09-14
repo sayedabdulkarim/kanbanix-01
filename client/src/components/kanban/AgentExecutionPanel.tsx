@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import { useExecutionSocket } from '@/lib/socket/useSocket';
 import DiffViewer from './DiffViewer';
 import { API_ENDPOINTS, apiFetch } from '@/lib/config/api';
+import SubtaskProgress from '../SubtaskProgress';
 
 interface AgentExecution {
   id: string;
@@ -49,6 +50,7 @@ export default function AgentExecutionPanel({ taskId, projectId, onClose, repoUr
   const [branchInfo, setBranchInfo] = useState<any>(null);
   const [showDiff, setShowDiff] = useState(true);
   const [pushAfterCommit, setPushAfterCommit] = useState(true);
+  const [subtasks, setSubtasks] = useState<any[]>([]);
   
   // Use WebSocket for real-time updates
   const { execution: socketExecution, logs: socketLogs } = useExecutionSocket(executionId);
@@ -82,6 +84,37 @@ export default function AgentExecutionPanel({ taskId, projectId, onClose, repoUr
         ...socketExecution,
         logs: socketLogs || prev?.logs || []
       }));
+    }
+    
+    // Parse subtask information from logs
+    if (socketLogs && socketLogs.length > 0) {
+      const subtaskLogs = socketLogs.filter(log => 
+        log.message?.includes('Executing subtask') || 
+        log.message?.includes('✅ Completed:') ||
+        log.message?.includes('❌ Failed:')
+      );
+      
+      if (subtaskLogs.length > 0) {
+        const parsedSubtasks = subtaskLogs.map(log => {
+          const match = log.message.match(/subtask (\d+)\/(\d+): (.+)/);
+          if (match) {
+            const [, current, total, name] = match;
+            return {
+              id: `subtask_${current}`,
+              name: name.replace(/^(Executing: |✅ Completed: |❌ Failed: )/, ''),
+              status: log.message.includes('✅') ? 'completed' : 
+                      log.message.includes('❌') ? 'failed' : 'running',
+              progress: (parseInt(current) / parseInt(total)) * 100,
+              message: log.message
+            };
+          }
+          return null;
+        }).filter(Boolean);
+        
+        if (parsedSubtasks.length > 0) {
+          setSubtasks(parsedSubtasks);
+        }
+      }
     }
   }, [socketExecution, socketLogs]);
 
@@ -276,8 +309,13 @@ export default function AgentExecutionPanel({ taskId, projectId, onClose, repoUr
           </div>
         </div>
         
-        {/* Progress Bar */}
-        {execution.progress !== undefined && (
+        {/* Progress Bar or Subtask Progress */}
+        {subtasks.length > 0 ? (
+          <SubtaskProgress 
+            subtasks={subtasks}
+            overallProgress={execution.progress || 0}
+          />
+        ) : execution.progress !== undefined ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs">
               <span className="text-muted-foreground">{execution.currentStep || 'Processing...'}</span>
@@ -294,7 +332,7 @@ export default function AgentExecutionPanel({ taskId, projectId, onClose, repoUr
               />
             </div>
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Summary */}

@@ -508,12 +508,13 @@ What Stays the Same:
 
 ### Overall Progress
 - **Phase 1**: ✅ 100% Complete (5/5 tasks) - FULLY INTEGRATED
-- **Phase 2**: 🔄 In Progress (0/4 tasks)
+- **Phase 2**: ✅ 100% Complete (4/4 tasks) - FULLY INTEGRATED
+- **Phase 2.5**: 🔴 CRITICAL GAP (0/6 tasks) - BUILD VALIDATION MISSING
 - **Phase 3**: ⬜ Not Started (0/4 tasks)
 - **Phase 4**: ⬜ Not Started (0/4 tasks)
 - **Phase 5**: ⬜ Not Started (0/3 tasks)
 
-**Total Progress**: 5/20 tasks (25%) - Starting Phase 2
+**Total Progress**: 9/26 tasks (35%) - Phase 2.5 BLOCKS QUALITY
 
 ### Phase 1: Context Management (Week 1-2) ✅ COMPLETE
 - [x] Create ProjectContext model ✅
@@ -522,11 +523,110 @@ What Stays the Same:
 - [x] Add context to Claude prompts ✅
 - [x] Integrate with existing system ✅
 
-### Phase 2: Task Decomposition (Week 3)
-- [ ] Implement TaskDecomposer
-- [ ] Create subtask execution engine
-- [ ] Add progress tracking UI
-- [ ] Implement rollback mechanism
+### Phase 2: Task Decomposition (Week 3) ✅ COMPLETE
+- [x] Implement TaskDecomposer ✅
+- [x] Create subtask execution engine ✅
+- [x] Integrate with aiAgentService ✅
+- [x] Add progress tracking UI ✅
+
+### Phase 2.5: Build Validation & Auto-Fix (CRITICAL GAP - Immediate Priority)
+
+**Issue Discovered**: Generated code has build errors but tasks show as "successful"
+
+#### Current State Analysis
+- ✅ **Dev Server Panel** validates builds AFTER generation
+- ❌ **Code generation** doesn't validate builds  
+- ✅ **Dev Server** creates fix tasks when errors found
+- ❌ **No prevention** of errors during generation
+
+#### Code Generation Flow
+1. **UI Trigger**: User drags task to "In Progress" column
+2. **API Route** (`/api/tasks/[taskId]`): Checks `AI_AUTO_EXECUTE_ON_DRAG`
+3. **AI Service** (`aiAgentService.ts`): Calls MCP tool
+4. **MCP Tool** (`generate_code_with_context`): Generates files
+5. **Missing**: Build validation before returning success
+
+#### Common Build Errors Found
+1. **File Extension Mismatch**: API routes created as `.js` instead of `.ts`
+2. **Missing Type Definitions**: TypeScript files without proper types
+3. **Import Path Issues**: Missing or incorrect import statements
+4. **Missing Dependencies**: Required packages not installed
+5. **Missing CSS Files**: `styles/globals.css` referenced but not created
+
+#### Implementation Approach (Best of Industry)
+1. **Auto-validation** like GitHub Copilot Workspace (run build after generation)
+2. **Reflection Loop** like Replit (70% auto-fix rate, max 5 iterations)
+3. **Warning Badge + Dev Server** fallback (when auto-fix fails - NO auto task creation)
+
+#### Implementation Tasks
+- [ ] Add build validation in MCP generator after file creation
+- [ ] Implement Reflection Loop pattern (diagnose → fix → retry up to 5x)
+- [ ] Detect project type and use correct file extensions (.ts vs .js)
+- [ ] Run `npm run build` or `yarn build` to validate
+- [ ] Parse and categorize errors (import/type/syntax/dependency)
+- [ ] Apply targeted fixes based on error types
+- [ ] On failure: Move to Review with ⚠️ badge + notification
+- [ ] User manually runs Dev Server to see errors and optionally create fix task
+
+#### Proposed Solution Architecture
+```javascript
+// In context-enhanced-generator.js
+class BuildValidator {
+  async validateWithReflectionLoop(workspacePath, generatedFiles, maxAttempts = 5) {
+    let attempt = 0;
+    
+    while (attempt < maxAttempts) {
+      // Step 1: Run build
+      const buildResult = await this.runBuild(workspacePath);
+      
+      if (buildResult.success) {
+        return { 
+          success: true, 
+          attempts: attempt + 1 
+        };
+      }
+      
+      // Step 2: Diagnose errors by type
+      const diagnosis = this.categorizeErrors(buildResult.errors);
+      
+      // Step 3: Generate targeted fixes
+      const fixes = await this.generateTargetedFixes(diagnosis, generatedFiles);
+      
+      // Step 4: Apply fixes
+      await this.applyFixes(workspacePath, fixes);
+      
+      attempt++;
+    }
+    
+    // Step 5: Failed after 5 attempts - return with warning
+    return { 
+      success: false,
+      partial: true,
+      warningBadge: true,
+      message: 'Code generated with build errors. Use Dev Server panel to validate.',
+      errors: buildResult.errors,
+      attempts: attempt
+    };
+  }
+  
+  categorizeErrors(errors) {
+    return {
+      missingImports: errors.filter(e => e.includes('Cannot find module')),
+      typeErrors: errors.filter(e => e.includes('Type') || e.includes('TS')),
+      extensionMismatch: errors.filter(e => e.includes('.js') && e.includes('.ts')),
+      missingDeps: errors.filter(e => e.includes('Module not found')),
+      syntaxErrors: errors.filter(e => e.includes('Unexpected token'))
+    };
+  }
+}
+```
+
+#### UI Fallback Flow (When Auto-fix Fails)
+1. Task moves to "In Review" with ⚠️ warning badge
+2. Hover tooltip: "Code generated with build errors. Run build from Dev Server panel."
+3. Toast notification guides user to Dev Server
+4. User runs Dev Server → sees errors → optionally creates fix task
+5. NO automatic task creation - user maintains control
 
 ### Phase 3: Multi-Agent System (Week 4-5)
 - [ ] Create specialized agents
