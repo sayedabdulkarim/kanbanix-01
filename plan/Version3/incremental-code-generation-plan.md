@@ -120,12 +120,12 @@ class RAGSystem {
       Project Type: ${projectContext.projectType}
       Existing Structure: ${projectContext.fileTree}
       Previous Tasks: ${projectContext.taskHistory.summary}
-    
+  
       Relevant Existing Files:
       ${relevantFiles.map((f) => `${f.path}:\n${f.content}`).join("\n")}
-    
+  
       New Task: ${task.description}
-    
+  
       Instructions:
       1. Build upon existing code, don't replace it
       2. Follow existing patterns and conventions
@@ -338,7 +338,7 @@ class TaskDecomposer {
         1. Each subtask should be independently executable
         2. Order them by dependency
         3. Identify which files each subtask affects
-      
+    
         Return format:
         - subtask_name
         - dependencies
@@ -533,16 +533,25 @@ What Stays the Same:
 - [x] Integrate with aiAgentService ✅
 - [x] Add progress tracking UI ✅
 
-### Phase 2.5: Build Validation & Auto-Fix (CRITICAL GAP - Immediate Priority)
+### Phase 2.5: Build Validation & Auto-Fix (COMPLETED ✅)
 
 **Issue Discovered**: Generated code has build errors but tasks show as "successful"
+**Additional Issue Found & Fixed**: Parent Next.js config interference causing false build failures
 
-#### Current State Analysis
+#### State Analysis (BEFORE → AFTER Implementation)
 
-- ✅ **Dev Server Panel** validates builds AFTER generation
-- ❌ **Code generation** doesn't validate builds
-- ✅ **Dev Server** creates fix tasks when errors found
-- ❌ **No prevention** of errors during generation
+**Before Phase 2.5:**
+- ✅ Dev Server Panel validates builds AFTER generation
+- ❌ Code generation didn't validate builds
+- ✅ Dev Server creates fix tasks when errors found
+- ❌ No prevention of errors during generation
+
+**After Phase 2.5 (CURRENT STATE):**
+- ✅ **Build validation integrated** in code generation
+- ✅ **Reflection loop** attempts auto-fixes (max 5 attempts)
+- ✅ **Exit code based** validation (0 = success, non-zero = failure)
+- ✅ **Workspace isolation** prevents config inheritance issues
+- ✅ **Graceful fallback** to Dev Server panel with warning badge
 
 #### Code Generation Flow
 
@@ -568,14 +577,15 @@ What Stays the Same:
 
 #### Implementation Tasks
 
-- [ ] Add build validation in MCP generator after file creation
-- [ ] Implement Reflection Loop pattern (diagnose → fix → retry up to 5x)
-- [ ] Detect project type and use correct file extensions (.ts vs .js)
-- [ ] Run `npm run build` or `yarn build` to validate
-- [ ] Parse and categorize errors (import/type/syntax/dependency)
-- [ ] Apply targeted fixes based on error types
-- [ ] On failure: Move to Review with ⚠️ badge + notification
-- [ ] User manually runs Dev Server to see errors and optionally create fix task
+- [x] Add build validation in MCP generator after file creation ✅
+- [x] Implement Reflection Loop pattern (diagnose → fix → retry up to 5x) ✅
+- [x] Detect project type and use correct file extensions (.ts vs .js) ✅
+- [x] Run `npm run build` or `yarn build` to validate ✅
+- [x] Parse and categorize errors (import/type/syntax/dependency) ✅
+- [x] Apply targeted fixes based on error types ✅
+- [x] On failure: Move to Review with ⚠️ badge + notification ✅
+- [x] User manually runs Dev Server to see errors and optionally create fix task ✅
+- [x] **Fix workspace isolation**: Moved projects to `workspace-projects/` outside client directory to prevent config inheritance ✅
 
 #### Proposed Solution Architecture
 

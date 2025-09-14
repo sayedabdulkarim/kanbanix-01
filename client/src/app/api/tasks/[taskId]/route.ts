@@ -244,7 +244,7 @@ export async function PUT(
         
         if (project) {
           const WORKSPACE_CONFIG = {
-            basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), 'projects'),
+            basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), '..', 'workspace-projects'),
           };
           const workspacePath = path.join(WORKSPACE_CONFIG.basePath, project.id);
           
@@ -341,7 +341,7 @@ export async function PUT(
         console.log('Task AI settings updated');
 
         // Get workspace path for the project
-        const workspacePath = path.join(process.cwd(), 'projects', existingTask.projectId);
+        const workspacePath = path.join(process.cwd(), '..', 'workspace-projects', existingTask.projectId);
         
         // Execute AI agent with workspace context
         console.log('Calling AI service executeTask with workspace:', workspacePath);

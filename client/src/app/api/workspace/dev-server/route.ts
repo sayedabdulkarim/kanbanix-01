@@ -256,7 +256,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get workspace path
-    const workspacePath = path.join(process.cwd(), 'projects', projectId);
+    const workspacePath = path.join(process.cwd(), '..', 'workspace-projects', projectId);
     
     // Check if package.json exists
     try {

@@ -52,8 +52,8 @@ tmp/
 temp/
 
 # Project workspaces (cloned repositories for task execution)
+workspace-projects/
+# Legacy project folders (keeping for cleanup)
 client/projects/
 projects/
 workspace/
-# Legacy project folders (if any exist)
-/projects/

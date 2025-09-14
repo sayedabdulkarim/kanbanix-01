@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get workspace path
-    const workspacePath = path.join(process.cwd(), 'projects', projectId);
+    const workspacePath = path.join(process.cwd(), '..', 'workspace-projects', projectId);
 
     // Read attached files if any
     const fileContents: { path: string; content: string }[] = [];

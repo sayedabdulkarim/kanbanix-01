@@ -14,7 +14,7 @@ const prisma = new PrismaClient();
 
 // Workspace configuration
 const WORKSPACE_CONFIG = {
-  basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), 'projects'),
+  basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), '..', 'workspace-projects'),
   maxSize: 500 * 1024 * 1024, // 500MB max
   timeout: 30 * 60 * 1000,    // 30 min max session
 };

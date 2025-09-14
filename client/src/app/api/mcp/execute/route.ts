@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
     // Add workspace path to params if projectId is provided
     const enhancedParams = { ...params };
     if (params.projectId) {
-      enhancedParams.workspacePath = params.workspacePath || path.join(process.cwd(), 'projects', params.projectId);
+      enhancedParams.workspacePath = params.workspacePath || path.join(process.cwd(), '..', 'workspace-projects', params.projectId);
     }
 
     // Execute MCP tool via stdio
@@ -62,7 +62,7 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
     const fs = require('fs');
     const { PrismaClient } = require('@prisma/client');
     const prisma = new PrismaClient();
-    const workspacePath = params.workspacePath || path.join(process.cwd(), 'projects', params.projectId);
+    const workspacePath = params.workspacePath || path.join(process.cwd(), '..', 'workspace-projects', params.projectId);
     const executionId = params.executionId;
     let beforeFiles: Set<string> = new Set();
     
@@ -163,7 +163,7 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
                   const result = JSON.parse(contentItem.text);
                   
                   // Use changes from the result if provided
-                  let changes = result.changes || [];
+                  const changes = result.changes || [];
                   console.log('Parsed MCP result with', changes.length, 'changes');
                   
                   responseReceived = true;
@@ -180,7 +180,7 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
                   const result = JSON.parse(text);
                   
                   // Use changes from the result if provided, otherwise detect
-                  let changes = result.changes || [];
+                  const changes = result.changes || [];
                 
                 // If no changes in result, detect file changes
                 if (!changes.length && fs.existsSync(workspacePath)) {

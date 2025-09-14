@@ -11,7 +11,7 @@ const prisma = new PrismaClient();
 
 // Get workspace path for a project
 function getWorkspacePath(projectId: string): string {
-  return path.join(process.cwd(), 'projects', projectId);
+  return path.join(process.cwd(), '..', 'workspace-projects', projectId);
 }
 
 // GET /api/workspace/session - Get current session state

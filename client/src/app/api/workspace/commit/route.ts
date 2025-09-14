@@ -10,7 +10,7 @@ import { TaskDiff } from '@/types/project';
 const prisma = new PrismaClient();
 
 const WORKSPACE_CONFIG = {
-  basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), 'projects'),
+  basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), '..', 'workspace-projects'),
 };
 
 export async function POST(request: NextRequest) {

@@ -8,7 +8,7 @@ import path from 'path';
 const execAsync = promisify(exec);
 
 const WORKSPACE_CONFIG = {
-  basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), 'projects'),
+  basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), '..', 'workspace-projects'),
 };
 
 export async function POST(request: NextRequest) {

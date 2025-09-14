@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
 
     if (inReviewTasksWithoutDiffs.length > 0) {
       console.log(`Found ${inReviewTasksWithoutDiffs.length} InReview tasks without diffs - capturing now...`);
-      const workspacePath = path.join(process.cwd(), 'projects', projectId);
+      const workspacePath = path.join(process.cwd(), '..', 'workspace-projects', projectId);
       
       try {
         // Import services needed for diff capture
@@ -134,7 +134,7 @@ export async function POST(request: NextRequest) {
       console.log(`Preserving workspace - found ${tasksWithDiffs.length} tasks with saved diffs`);
       
       // Only clean build artifacts and node_modules, not the entire workspace
-      const workspacePath = path.join(process.cwd(), 'projects', projectId);
+      const workspacePath = path.join(process.cwd(), '..', 'workspace-projects', projectId);
       
       // Delete node_modules to save significant space
       const nodeModulesPath = path.join(workspacePath, 'node_modules');
@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
       }
     } else {
       // No tasks with saved diffs - safe to delete the entire workspace
-      const workspacePath = path.join(process.cwd(), 'projects', projectId);
+      const workspacePath = path.join(process.cwd(), '..', 'workspace-projects', projectId);
       
       // Clean main workspace
       try {

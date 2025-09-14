@@ -168,16 +168,21 @@ export class SubtaskExecutor {
       }
     );
     
-    if (response.success) {
+    // Handle both full success and partial success with warnings
+    if (response.success || response.partial) {
       return {
         subtaskId: subtask.id,
-        success: true,
+        success: response.success || false,
+        partial: response.partial || false,
+        warningBadge: response.warningBadge || false,
+        buildValidation: response.buildValidation,
         filesCreated: response.changes?.filter((c: any) => c.type === 'created').map((c: any) => c.path) || [],
         filesModified: response.changes?.filter((c: any) => c.type === 'modified').map((c: any) => c.path) || [],
-        output: response.summary
+        output: response.summary,
+        message: response.message
       };
     } else {
-      throw new Error(response.error || 'Subtask execution failed');
+      throw new Error(response.error || response.message || 'Subtask execution failed');
     }
   }
 

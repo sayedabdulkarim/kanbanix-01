@@ -141,7 +141,7 @@ export class AIAgentService {
     }
 
     // Use workspace path if provided, otherwise generate from projectId
-    const workspacePath = context.workspacePath || path.join(process.cwd(), 'projects', task.projectId);
+    const workspacePath = context.workspacePath || path.join(process.cwd(), '..', 'workspace-projects', task.projectId);
 
     // Create agent execution record
     const execution = await this.prisma.agentExecution.create({
@@ -251,7 +251,7 @@ export class AIAgentService {
         console.log(`Task: ${execution.task.title} (${execution.task.id})`);
         
         try {
-          const workspacePath = path.join(process.cwd(), 'projects', execution.task.projectId);
+          const workspacePath = path.join(process.cwd(), '..', 'workspace-projects', execution.task.projectId);
           
           // Import diffTrackingService dynamically
           const { default: diffTrackingService } = await import('@/lib/services/diffTrackingService.server');
@@ -309,11 +309,21 @@ export class AIAgentService {
           try {
             console.log(`Moving task ${execution.task.id} to InReview column ${inReviewColumn.id}`);
             
+            // Prepare metadata with build status if there are warnings
+            const metadata = execution.task.metadata || {};
+            if (result.warningBadge || result.partial) {
+              metadata.buildStatus = 'warning';
+              metadata.buildMessage = result.message || 'Code generated with build errors. Use Dev Server panel to validate and fix.';
+              metadata.buildValidation = result.buildValidation;
+            }
+            
             const updatedTask = await this.prisma.task.update({
               where: { id: execution.task.id },
               data: {
                 status: 'inReview',
-                columnId: inReviewColumn.id,
+                column: {
+                  connect: { id: inReviewColumn.id }
+                },
                 updatedAt: new Date()
               }
             });
@@ -336,7 +346,9 @@ export class AIAgentService {
               (global as any).io.to(`project-${execution.task.projectId}`).emit('task-updated', {
                 taskId: execution.task.id,
                 status: 'inReview',
-                columnId: inReviewColumn.id
+                columnId: inReviewColumn.id,
+                metadata: metadata,
+                hasWarning: result.warningBadge || result.partial || false
               });
             }
           } catch (error) {
@@ -442,15 +454,23 @@ export class AIAgentService {
         }
       );
       
+      // Check if any subtask has warnings
+      const hasWarnings = results.some(r => r.warningBadge || r.partial);
+      const hasAnySuccess = results.some(r => r.success || r.partial);
+      
       // Aggregate results
       const mcpResult = {
-        success: results.filter(r => r.success).length > 0,
+        success: results.filter(r => r.success).length === results.length, // Only fully successful if all succeed
+        partial: hasWarnings && hasAnySuccess, // Partial if some succeeded but with warnings
+        warningBadge: hasWarnings,
         files: {},
         changes: results.flatMap(r => [
           ...r.filesCreated.map(f => ({ path: f, type: 'created' })),
           ...r.filesModified.map(f => ({ path: f, type: 'modified' }))
         ]),
-        summary: `Completed ${results.filter(r => r.success).length}/${results.length} subtasks`
+        summary: `Completed ${results.filter(r => r.success).length}/${results.length} subtasks`,
+        buildValidation: results.find(r => r.buildValidation)?.buildValidation,
+        message: hasWarnings ? 'Code generated with build errors. Use Dev Server panel to validate and fix.' : undefined
       };
       
       await this.updateProgress(executionId, 85, 'Processing decomposed results');
@@ -489,7 +509,7 @@ export class AIAgentService {
         if (mcpBuildValidation) {
           await this.updateProgress(executionId, 85, 'Processing build validation results...');
           
-          if (mcpBuildValidation.success) {
+          if (mcpBuildValidation.passed) {
             await this.addExecutionLog(executionId, 'info', `✅ Build validation passed${mcpBuildValidation.skipped ? ' (skipped - simple change)' : ''}`);
             buildValidationPassed = true;
           } else {

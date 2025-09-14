@@ -181,7 +181,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Project ID required' }, { status: 400 });
     }
 
-    const workspacePath = path.join(process.cwd(), 'projects', projectId);
+    const workspacePath = path.join(process.cwd(), '..', 'workspace-projects', projectId);
     
     // Check if package.json exists
     try {

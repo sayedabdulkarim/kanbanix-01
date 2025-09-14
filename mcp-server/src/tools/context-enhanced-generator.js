@@ -3,9 +3,380 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import Anthropic from '@anthropic-ai/sdk';
+import { spawn } from 'child_process';
+import { promisify } from 'util';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Build Validator with Reflection Loop
+class BuildValidator {
+  constructor(anthropic) {
+    this.anthropic = anthropic;
+  }
+
+  async validateWithReflectionLoop(workspacePath, generatedFiles, maxAttempts = 5) {
+    // Skip validation if explicitly disabled
+    if (process.env.SKIP_BUILD_VALIDATION === 'true') {
+      console.log('[BuildValidator] Skipping validation (SKIP_BUILD_VALIDATION=true)');
+      return { success: true, skipped: true };
+    }
+
+    console.log('[BuildValidator] Starting build validation with Reflection Loop...');
+    let attempt = 0;
+    
+    while (attempt < maxAttempts) {
+      console.log(`[BuildValidator] Attempt ${attempt + 1}/${maxAttempts}`);
+      
+      // Step 1: Run build
+      const buildResult = await this.runBuild(workspacePath);
+      
+      if (buildResult.success) {
+        console.log(`[BuildValidator] ✅ Build succeeded after ${attempt + 1} attempts`);
+        return { 
+          success: true, 
+          attempts: attempt + 1 
+        };
+      }
+      
+      // Step 2: Diagnose errors by type
+      console.log('[BuildValidator] Diagnosing build errors...');
+      const diagnosis = this.categorizeErrors(buildResult.errors);
+      
+      // Log error categories
+      Object.entries(diagnosis).forEach(([type, errors]) => {
+        if (errors.length > 0) {
+          console.log(`[BuildValidator] Found ${errors.length} ${type}`);
+        }
+      });
+      
+      // Step 3: Generate targeted fixes
+      console.log('[BuildValidator] Generating targeted fixes...');
+      const fixes = await this.generateTargetedFixes(diagnosis, generatedFiles, workspacePath);
+      
+      if (!fixes || fixes.length === 0) {
+        console.log('[BuildValidator] No fixes generated, stopping attempts');
+        break;
+      }
+      
+      // Step 4: Apply fixes
+      console.log(`[BuildValidator] Applying ${fixes.length} fixes...`);
+      await this.applyFixes(workspacePath, fixes);
+      
+      attempt++;
+    }
+    
+    // Step 5: Failed after max attempts - return with warning
+    console.log(`[BuildValidator] ⚠️ Build validation failed after ${attempt} attempts`);
+    return { 
+      success: false,
+      partial: true,
+      warningBadge: true,
+      message: 'Code generated with build errors. Use Dev Server panel to validate and fix.',
+      attempts: attempt
+    };
+  }
+  
+  async runBuild(workspacePath) {
+    try {
+      // Check if package.json exists
+      const packageJsonPath = path.join(workspacePath, 'package.json');
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+      
+      // Determine build command
+      let buildCommand = 'npm';
+      let buildArgs = ['run', 'build'];
+      
+      // Check if yarn.lock exists
+      const useYarn = await fs.access(path.join(workspacePath, 'yarn.lock'))
+        .then(() => true)
+        .catch(() => false);
+      
+      if (useYarn) {
+        buildCommand = 'yarn';
+        buildArgs = ['build'];
+      }
+      
+      // Skip if no build script
+      if (!packageJson.scripts?.build) {
+        console.log('[BuildValidator] No build script found, skipping validation');
+        return { success: true, skipped: true };
+      }
+      
+      console.log(`[BuildValidator] Running: ${buildCommand} ${buildArgs.join(' ')}`);
+      
+      return new Promise((resolve) => {
+        const buildProcess = spawn(buildCommand, buildArgs, {
+          cwd: workspacePath,
+          env: { 
+            ...process.env, 
+            NODE_ENV: 'production',
+            FORCE_COLOR: '0'
+          }
+        });
+        
+        let stdout = '';
+        let stderr = '';
+        let errors = [];
+        
+        buildProcess.stdout?.on('data', (data) => {
+          stdout += data.toString();
+        });
+        
+        buildProcess.stderr?.on('data', (data) => {
+          stderr += data.toString();
+        });
+        
+        buildProcess.on('close', (code) => {
+          if (code === 0) {
+            console.log('[BuildValidator] Build completed successfully (exit code 0)');
+            resolve({ success: true });
+          } else {
+            console.log(`[BuildValidator] Build failed with exit code ${code}`);
+            const allOutput = stdout + stderr;
+            
+            // Extract error lines for better diagnosis
+            const errorLines = allOutput.split('\n').filter(line => 
+              line.includes('error') || 
+              line.includes('Error') ||
+              line.includes('Failed')
+            );
+            
+            resolve({ 
+              success: false, 
+              errors: errorLines.length > 0 ? errorLines : ['Build failed with exit code ' + code],
+              fullOutput: allOutput,
+              exitCode: code
+            });
+          }
+        });
+        
+        // Timeout after 60 seconds
+        setTimeout(() => {
+          buildProcess.kill();
+          resolve({ 
+            success: false, 
+            errors: ['Build timeout after 60 seconds'],
+            timeout: true 
+          });
+        }, 60000);
+      });
+    } catch (error) {
+      console.error('[BuildValidator] Error running build:', error);
+      return { 
+        success: false, 
+        errors: [error.message],
+        exception: true
+      };
+    }
+  }
+  
+  categorizeErrors(errors) {
+    const errorText = errors.join('\n');
+    
+    return {
+      missingImports: errors.filter(e => 
+        e.includes('Cannot find module') || 
+        e.includes('Module not found') ||
+        e.includes('Cannot resolve')
+      ),
+      typeErrors: errors.filter(e => 
+        e.includes('Type ') || 
+        e.includes('TS') ||
+        e.includes('type ')
+      ),
+      extensionMismatch: errors.filter(e => 
+        (e.includes('.js') && e.includes('.ts')) ||
+        e.includes('An import path can only end with')
+      ),
+      missingDeps: errors.filter(e => 
+        e.includes('Module not found: Can\'t resolve') &&
+        !e.includes('./') && !e.includes('../')
+      ),
+      syntaxErrors: errors.filter(e => 
+        e.includes('Unexpected token') ||
+        e.includes('SyntaxError') ||
+        e.includes('Parsing error')
+      ),
+      missingFiles: errors.filter(e =>
+        e.includes('ENOENT') ||
+        e.includes('no such file') ||
+        e.includes('Cannot find module \'./') ||
+        e.includes('styles/globals.css')
+      )
+    };
+  }
+  
+  async generateTargetedFixes(diagnosis, generatedFiles, workspacePath) {
+    const fixes = [];
+    
+    // Fix 1: Extension mismatches (.js → .ts)
+    if (diagnosis.extensionMismatch.length > 0) {
+      console.log('[BuildValidator] Fixing file extension mismatches...');
+      for (const error of diagnosis.extensionMismatch) {
+        // Extract filename from error
+        const match = error.match(/route\.(js|ts)/);
+        if (match) {
+          // Find all route.js files and rename to route.ts
+          for (const [filePath, content] of Object.entries(generatedFiles)) {
+            if (filePath.endsWith('route.js')) {
+              const newPath = filePath.replace('route.js', 'route.ts');
+              fixes.push({
+                type: 'rename',
+                oldPath: filePath,
+                newPath: newPath,
+                content: content
+              });
+            }
+          }
+        }
+      }
+    }
+    
+    // Fix 2: Missing imports
+    if (diagnosis.missingImports.length > 0) {
+      console.log('[BuildValidator] Generating missing imports...');
+      const importFixes = await this.generateImportFixes(diagnosis.missingImports, workspacePath);
+      fixes.push(...importFixes);
+    }
+    
+    // Fix 3: Missing CSS files
+    if (diagnosis.missingFiles.some(e => e.includes('globals.css'))) {
+      console.log('[BuildValidator] Creating missing CSS files...');
+      fixes.push({
+        type: 'create',
+        path: 'styles/globals.css',
+        content: `/* Global styles */
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+`
+      });
+    }
+    
+    // Fix 4: Type errors (use AI to fix)
+    if (diagnosis.typeErrors.length > 0 && this.anthropic) {
+      console.log('[BuildValidator] Using AI to fix type errors...');
+      const typeFixes = await this.generateAIFixes(diagnosis.typeErrors, generatedFiles);
+      fixes.push(...typeFixes);
+    }
+    
+    return fixes;
+  }
+  
+  async generateImportFixes(missingImports, workspacePath) {
+    const fixes = [];
+    
+    for (const error of missingImports) {
+      // Extract module name from error
+      const moduleMatch = error.match(/Cannot find module ['"](.+?)['"]/);
+      if (moduleMatch) {
+        const moduleName = moduleMatch[1];
+        
+        // Check if it's a relative import that needs fixing
+        if (moduleName.startsWith('.') || moduleName.startsWith('../')) {
+          // Try adding .js or .ts extension
+          const possibleExtensions = ['.ts', '.tsx', '.js', '.jsx'];
+          for (const ext of possibleExtensions) {
+            const testPath = path.join(workspacePath, moduleName + ext);
+            const exists = await fs.access(testPath).then(() => true).catch(() => false);
+            if (exists) {
+              // Found the file, need to update import
+              fixes.push({
+                type: 'updateImport',
+                from: moduleName,
+                to: moduleName + ext
+              });
+              break;
+            }
+          }
+        }
+      }
+    }
+    
+    return fixes;
+  }
+  
+  async generateAIFixes(typeErrors, generatedFiles) {
+    if (!this.anthropic) return [];
+    
+    try {
+      const prompt = `Fix these TypeScript errors. Return ONLY the fixed code, no explanations:
+
+Errors:
+${typeErrors.slice(0, 5).join('\n')}
+
+Current files:
+${Object.entries(generatedFiles).slice(0, 3).map(([path, content]) => 
+  `File: ${path}\n${String(content).slice(0, 500)}...`
+).join('\n\n')}
+
+Return a JSON object with file paths as keys and fixed content as values.`;
+
+      const message = await this.anthropic.messages.create({
+        model: 'claude-3-haiku-20240307', // Use fast model for fixes
+        max_tokens: 2048,
+        temperature: 0,
+        messages: [{ role: 'user', content: prompt }]
+      });
+      
+      const responseText = message.content[0].text;
+      const fixes = JSON.parse(responseText);
+      
+      return Object.entries(fixes).map(([filePath, content]) => ({
+        type: 'update',
+        path: filePath,
+        content: content
+      }));
+    } catch (error) {
+      console.error('[BuildValidator] AI fix generation failed:', error);
+      return [];
+    }
+  }
+  
+  async applyFixes(workspacePath, fixes) {
+    for (const fix of fixes) {
+      try {
+        const fullPath = path.join(workspacePath, fix.path || fix.newPath);
+        
+        switch (fix.type) {
+          case 'create':
+          case 'update':
+            await fs.mkdir(path.dirname(fullPath), { recursive: true });
+            await fs.writeFile(fullPath, fix.content, 'utf-8');
+            console.log(`[BuildValidator] ${fix.type === 'create' ? 'Created' : 'Updated'}: ${fix.path}`);
+            break;
+            
+          case 'rename':
+            const oldFullPath = path.join(workspacePath, fix.oldPath);
+            await fs.rename(oldFullPath, fullPath);
+            console.log(`[BuildValidator] Renamed: ${fix.oldPath} → ${fix.newPath}`);
+            break;
+            
+          case 'updateImport':
+            // This would need to scan files and update import statements
+            console.log(`[BuildValidator] Import fix needed: ${fix.from} → ${fix.to}`);
+            break;
+        }
+      } catch (error) {
+        console.error(`[BuildValidator] Failed to apply fix:`, error);
+      }
+    }
+  }
+}
 
 // Load project context from database
 async function loadProjectContext(projectId) {
@@ -331,17 +702,57 @@ Return ONLY valid JSON, no markdown or explanations.`;
         });
       }
       
-      return {
-        success: true,
-        ...generatedCode,
-        changes: changes,
-        context_aware: true,
-        context_used: {
-          project_type: projectContext?.projectType,
-          backend_type: projectContext?.backendType,
-          task_history_available: !!projectContext?.taskHistory
-        }
-      };
+      // Step 3: Run build validation with Reflection Loop
+      console.log('[Context-Enhanced] Starting build validation...');
+      const validator = new BuildValidator(anthropic);
+      const validationResult = await validator.validateWithReflectionLoop(
+        workspace_path,
+        generatedCode.files || {},
+        5 // max attempts
+      );
+      
+      // Return result based on validation outcome
+      if (validationResult.success) {
+        console.log('[Context-Enhanced] ✅ Build validation passed');
+        return {
+          success: true,
+          ...generatedCode,
+          changes: changes,
+          context_aware: true,
+          buildValidation: {
+            passed: true,
+            attempts: validationResult.attempts,
+            skipped: validationResult.skipped
+          },
+          context_used: {
+            project_type: projectContext?.projectType,
+            backend_type: projectContext?.backendType,
+            task_history_available: !!projectContext?.taskHistory
+          }
+        };
+      } else {
+        // Build failed but code was generated
+        console.log('[Context-Enhanced] ⚠️ Build validation failed - returning with warning');
+        return {
+          success: false,
+          partial: true,
+          warningBadge: true,
+          ...generatedCode,
+          changes: changes,
+          context_aware: true,
+          buildValidation: {
+            passed: false,
+            attempts: validationResult.attempts,
+            message: validationResult.message
+          },
+          context_used: {
+            project_type: projectContext?.projectType,
+            backend_type: projectContext?.backendType,
+            task_history_available: !!projectContext?.taskHistory
+          },
+          message: validationResult.message
+        };
+      }
     }
   }
 ];

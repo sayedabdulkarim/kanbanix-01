@@ -28,7 +28,7 @@ export class ContextManager {
   private workspacePath: string;
 
   constructor() {
-    this.workspacePath = process.env.WORKSPACE_PATH || path.join(process.cwd(), 'projects');
+    this.workspacePath = process.env.WORKSPACE_PATH || path.join(process.cwd(), '..', 'workspace-projects');
   }
 
   /**

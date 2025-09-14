@@ -12,7 +12,7 @@ const execAsync = promisify(exec);
 const prisma = new PrismaClient();
 
 const WORKSPACE_CONFIG = {
-  basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), 'projects'),
+  basePath: process.env.WORKSPACE_PATH || path.join(process.cwd(), '..', 'workspace-projects'),
 };
 
 // Track ongoing merge processes to prevent duplicates
