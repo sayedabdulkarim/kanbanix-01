@@ -210,15 +210,25 @@ export async function DELETE(request: NextRequest) {
 
     // Clean up workspace files before deleting from database
     try {
-      // Projects are always stored in client/projects/
-      const projectPath = path.join(process.cwd(), 'projects', projectId);
+      // Projects are now stored in workspace-projects/
+      const workspacePath = path.join(process.cwd(), '..', 'workspace-projects', projectId);
       
       try {
-        await fs.access(projectPath);
-        await fs.rm(projectPath, { recursive: true, force: true });
-        console.log(`Cleaned up project folder at ${projectPath}`);
+        await fs.access(workspacePath);
+        await fs.rm(workspacePath, { recursive: true, force: true });
+        console.log(`Cleaned up workspace folder at ${workspacePath}`);
       } catch (error) {
-        console.log(`No project folder found at ${projectPath}, skipping cleanup`);
+        console.log(`No workspace folder found at ${workspacePath}, skipping cleanup`);
+      }
+      
+      // Also try to clean up old location in case it exists
+      const oldProjectPath = path.join(process.cwd(), 'projects', projectId);
+      try {
+        await fs.access(oldProjectPath);
+        await fs.rm(oldProjectPath, { recursive: true, force: true });
+        console.log(`Also cleaned up old project folder at ${oldProjectPath}`);
+      } catch (error) {
+        // Silent - old location might not exist
       }
     } catch (error) {
       // Log error but don't fail the deletion

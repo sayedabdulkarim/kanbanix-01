@@ -469,7 +469,7 @@ export class AIAgentService {
           ...r.filesModified.map(f => ({ path: f, type: 'modified' }))
         ]),
         summary: `Completed ${results.filter(r => r.success).length}/${results.length} subtasks`,
-        buildValidation: results.find(r => r.buildValidation)?.buildValidation,
+        buildValidation: results.findLast(r => r.buildValidation)?.buildValidation || results.find(r => r.buildValidation && !r.buildValidation.success)?.buildValidation,
         message: hasWarnings ? 'Code generated with build errors. Use Dev Server panel to validate and fix.' : undefined
       };
       

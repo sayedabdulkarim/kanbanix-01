@@ -5,9 +5,115 @@ import { dirname } from 'path';
 import Anthropic from '@anthropic-ai/sdk';
 import { spawn } from 'child_process';
 import { promisify } from 'util';
+import { buildSystemDetector } from './build-system-detector.js';
+import { StubGenerator } from './stub-generator.js';
+import TypeAwareGenerator from './type-aware-generator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Helper function to apply intelligent file modifications
+async function applyFileModifications(existingContent, newContent, modifications) {
+  let result = existingContent;
+  
+  // Handle different modification types
+  if (modifications.type === 'add_to_prisma_schema' || modifications.type === 'add_model') {
+    // Add Prisma models to existing schema
+    const newModels = modifications.models || modifications.content || newContent;
+    
+    // Check if the new content is already a complete schema
+    if (newModels.includes('generator client') || newModels.includes('datasource db')) {
+      // It's a complete schema, extract just the models
+      const modelMatches = newModels.match(/model\s+\w+\s*{[^}]+}/gs) || [];
+      if (modelMatches.length > 0) {
+        // Append models to existing schema
+        result = existingContent.trimEnd() + '\n\n' + modelMatches.join('\n\n') + '\n';
+      } else {
+        result = existingContent; // No models found, keep existing
+      }
+    } else {
+      // It's just model definitions, append them
+      result = existingContent.trimEnd() + '\n\n' + newModels + '\n';
+    }
+  } else if (modifications.type === 'add_imports') {
+    // Add imports at the top of the file
+    const imports = modifications.imports || [];
+    const importStatements = imports.join('\n');
+    
+    // Check if imports already exist
+    const missingImports = imports.filter(imp => !existingContent.includes(imp));
+    if (missingImports.length > 0) {
+      // Add after existing imports or at the top
+      const importMatch = existingContent.match(/^(import .+\n)+/m);
+      if (importMatch) {
+        const lastImportIndex = importMatch.index + importMatch[0].length;
+        result = existingContent.slice(0, lastImportIndex) + 
+                missingImports.join('\n') + '\n' + 
+                existingContent.slice(lastImportIndex);
+      } else {
+        result = missingImports.join('\n') + '\n\n' + existingContent;
+      }
+    }
+  } else if (modifications.type === 'add_functions') {
+    // Add functions to the file
+    const functions = modifications.functions || [];
+    for (const func of functions) {
+      if (!existingContent.includes(func.name)) {
+        // Add function before the last closing brace or at the end
+        const lastBraceIndex = existingContent.lastIndexOf('}');
+        if (lastBraceIndex !== -1) {
+          result = existingContent.slice(0, lastBraceIndex) + 
+                  '\n' + func.content + '\n' + 
+                  existingContent.slice(lastBraceIndex);
+        } else {
+          result = existingContent + '\n\n' + func.content;
+        }
+      }
+    }
+  } else if (modifications.type === 'add_to_section') {
+    // Add content to a specific section (like routes, middleware, etc.)
+    const { section, content, marker } = modifications;
+    
+    if (marker && existingContent.includes(marker)) {
+      // Insert after the marker
+      const markerIndex = existingContent.indexOf(marker);
+      const insertIndex = markerIndex + marker.length;
+      result = existingContent.slice(0, insertIndex) + 
+              '\n' + content + 
+              existingContent.slice(insertIndex);
+    } else if (section) {
+      // Try to find the section by pattern
+      const sectionPattern = new RegExp(`(${section}[^{]*{)`, 'i');
+      const sectionMatch = existingContent.match(sectionPattern);
+      if (sectionMatch) {
+        const insertIndex = sectionMatch.index + sectionMatch[0].length;
+        result = existingContent.slice(0, insertIndex) + 
+                '\n  ' + content + 
+                existingContent.slice(insertIndex);
+      } else {
+        // Append to end if section not found
+        result = existingContent + '\n\n' + content;
+      }
+    }
+  } else if (modifications.type === 'merge_objects') {
+    // For JSON or object files, merge the objects
+    try {
+      const existingObj = JSON.parse(existingContent);
+      const newObj = JSON.parse(newContent);
+      const merged = { ...existingObj, ...newObj };
+      result = JSON.stringify(merged, null, 2);
+    } catch (e) {
+      // Not JSON, fall back to replacement
+      console.log('[Context-Enhanced] Not JSON content, using full replacement');
+      result = newContent;
+    }
+  } else {
+    // Default: Use the new content if no specific modification type
+    result = newContent;
+  }
+  
+  return result;
+}
 
 // Build Validator with Reflection Loop
 class BuildValidator {
@@ -41,7 +147,7 @@ class BuildValidator {
       
       // Step 2: Diagnose errors by type
       console.log('[BuildValidator] Diagnosing build errors...');
-      const diagnosis = this.categorizeErrors(buildResult.errors);
+      const diagnosis = await this.categorizeErrors(buildResult.errors, workspacePath);
       
       // Log error categories
       Object.entries(diagnosis).forEach(([type, errors]) => {
@@ -55,8 +161,14 @@ class BuildValidator {
       const fixes = await this.generateTargetedFixes(diagnosis, generatedFiles, workspacePath);
       
       if (!fixes || fixes.length === 0) {
-        console.log('[BuildValidator] No fixes generated, stopping attempts');
-        break;
+        console.log('[BuildValidator] No fixes generated for attempt ' + (attempt + 1));
+        // Still increment attempt counter to show we tried
+        attempt++;
+        
+        // Continue trying - sometimes builds need multiple runs (e.g., after prisma generate)
+        // or errors might resolve after file system updates
+        console.log('[BuildValidator] Will retry build in case errors self-resolve...');
+        continue;
       }
       
       // Step 4: Apply fixes
@@ -73,37 +185,27 @@ class BuildValidator {
       partial: true,
       warningBadge: true,
       message: 'Code generated with build errors. Use Dev Server panel to validate and fix.',
-      attempts: attempt
+      attempts: attempt || 1  // Ensure at least 1 attempt is reported
     };
   }
   
   async runBuild(workspacePath) {
     try {
-      // Check if package.json exists
-      const packageJsonPath = path.join(workspacePath, 'package.json');
-      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+      // Use framework-agnostic build system detector
+      const buildInfo = await buildSystemDetector.getBuildCommand(workspacePath, this.anthropic);
       
-      // Determine build command
-      let buildCommand = 'npm';
-      let buildArgs = ['run', 'build'];
-      
-      // Check if yarn.lock exists
-      const useYarn = await fs.access(path.join(workspacePath, 'yarn.lock'))
-        .then(() => true)
-        .catch(() => false);
-      
-      if (useYarn) {
-        buildCommand = 'yarn';
-        buildArgs = ['build'];
-      }
-      
-      // Skip if no build script
-      if (!packageJson.scripts?.build) {
-        console.log('[BuildValidator] No build script found, skipping validation');
+      if (!buildInfo.detected || !buildInfo.command) {
+        console.log('[BuildValidator] No build system detected, skipping validation');
         return { success: true, skipped: true };
       }
       
-      console.log(`[BuildValidator] Running: ${buildCommand} ${buildArgs.join(' ')}`);
+      console.log(`[BuildValidator] Detected ${buildInfo.language} project${buildInfo.framework ? ` (${buildInfo.framework})` : ''}`);
+      console.log(`[BuildValidator] Running: ${buildInfo.command}`);
+      
+      // Parse command into executable and args
+      const commandParts = buildInfo.command.split(' ');
+      const buildCommand = commandParts[0];
+      const buildArgs = commandParts.slice(1);
       
       return new Promise((resolve) => {
         const buildProcess = spawn(buildCommand, buildArgs, {
@@ -171,56 +273,283 @@ class BuildValidator {
     }
   }
   
-  categorizeErrors(errors) {
-    const errorText = errors.join('\n');
+  async categorizeErrors(errors, workspacePath) {
+    // Direct pattern-based categorization - NO AI
+    console.log('[BuildValidator] Categorizing errors directly from build output');
     
-    return {
-      missingImports: errors.filter(e => 
-        e.includes('Cannot find module') || 
-        e.includes('Module not found') ||
-        e.includes('Cannot resolve')
-      ),
-      typeErrors: errors.filter(e => 
-        e.includes('Type ') || 
-        e.includes('TS') ||
-        e.includes('type ')
-      ),
-      extensionMismatch: errors.filter(e => 
-        (e.includes('.js') && e.includes('.ts')) ||
-        e.includes('An import path can only end with')
-      ),
-      missingDeps: errors.filter(e => 
-        e.includes('Module not found: Can\'t resolve') &&
-        !e.includes('./') && !e.includes('../')
-      ),
-      syntaxErrors: errors.filter(e => 
-        e.includes('Unexpected token') ||
-        e.includes('SyntaxError') ||
-        e.includes('Parsing error')
-      ),
-      missingFiles: errors.filter(e =>
-        e.includes('ENOENT') ||
-        e.includes('no such file') ||
-        e.includes('Cannot find module \'./') ||
-        e.includes('styles/globals.css')
-      )
+    const categorized = {
+      missingImports: [],
+      typeErrors: [],
+      syntaxErrors: [],
+      missingFiles: [],
+      missingDeps: [],
+      extensionMismatch: [],
+      other: []
     };
+    
+    for (const error of errors) {
+      // Missing module/import errors - Updated patterns to handle both quoted and unquoted paths
+      if (error.match(/Module not found.*Can't resolve ['"]?([^'"]+)['"]?/i) ||
+          error.match(/Cannot find module ['"]?([^'"]+)['"]?/i) ||
+          error.match(/Could not resolve ['"]?([^'"]+)['"]?/i) ||
+          error.match(/Can't resolve ['"]?([^'"]+)['"]?/i) ||
+          error.includes("Module not found") ||
+          error.includes("Cannot resolve")) {
+        categorized.missingImports.push(error);
+      }
+      // TypeScript type errors
+      else if (error.match(/TS\d+:/i) || 
+               error.match(/Type .* is not assignable to type/i) ||
+               error.match(/Property .* does not exist on type/i)) {
+        categorized.typeErrors.push(error);
+      }
+      // Syntax errors
+      else if (error.match(/SyntaxError:/i) ||
+               error.match(/Unexpected token/i) ||
+               error.match(/Parsing error:/i)) {
+        categorized.syntaxErrors.push(error);
+      }
+      // File not found errors
+      else if (error.match(/ENOENT.*no such file or directory/i) ||
+               error.match(/File not found:/i)) {
+        categorized.missingFiles.push(error);
+      }
+      // Missing npm packages
+      else if (error.match(/Cannot find package/i) ||
+               error.match(/Module not installed/i)) {
+        categorized.missingDeps.push(error);
+      }
+      // Extension mismatch
+      else if (error.match(/\.jsx?' imported from/i) ||
+               error.match(/expected '\.ts' extension/i)) {
+        categorized.extensionMismatch.push(error);
+      }
+      // Everything else
+      else {
+        categorized.other.push(error);
+      }
+    }
+    
+    console.log(`[BuildValidator] Categorized: ${categorized.missingImports.length} imports, ${categorized.typeErrors.length} types, ${categorized.syntaxErrors.length} syntax, ${categorized.missingFiles.length} files, ${categorized.missingDeps.length} deps`);
+    console.log(`[BuildValidator] Found ${categorized.other.length} other`);
+    
+    return categorized;
   }
   
   async generateTargetedFixes(diagnosis, generatedFiles, workspacePath) {
     const fixes = [];
     
-    // Fix 1: Extension mismatches (.js → .ts)
-    if (diagnosis.extensionMismatch.length > 0) {
+    // Detect project language for context
+    const buildInfo = await buildSystemDetector.detect(workspacePath);
+    const projectLanguage = buildInfo.language || 'unknown';
+    
+    console.log(`[BuildValidator] Generating fixes for ${projectLanguage} project`);
+    
+    // Fix 1: Missing files/imports
+    const allMissingFileErrors = [...(diagnosis.missingFiles || []), ...(diagnosis.missingImports || [])];
+    if (allMissingFileErrors.length > 0) {
+      console.log('[BuildValidator] Processing missing file/import errors...');
+      
+      for (const error of allMissingFileErrors) {
+        console.log(`[BuildValidator] Processing: ${error.substring(0, 200)}`);
+        
+        // Extract the actual file path from the error message
+        let missingFile = null;
+        
+        // Pattern 1: Module not found: Can't resolve '@/lib/prisma' (with or without quotes)
+        const moduleMatch = error.match(/Module not found.*Can't resolve ['"]?([^'"\s]+)['"]?/i) ||
+                           error.match(/Can't resolve ['"]?([^'"\s]+)['"]?/i);
+        if (moduleMatch) {
+          missingFile = moduleMatch[1];
+        }
+        
+        // Pattern 2: Cannot find module './something' (with or without quotes)
+        const cannotFindMatch = error.match(/Cannot find module ['"]?([^'"\s]+)['"]?/i);
+        if (!missingFile && cannotFindMatch) {
+          missingFile = cannotFindMatch[1];
+        }
+        
+        // Pattern 3: Could not resolve (common in Vite/Rollup)
+        const couldNotResolveMatch = error.match(/Could not resolve ['"]?([^'"\s]+)['"]?/i);
+        if (!missingFile && couldNotResolveMatch) {
+          missingFile = couldNotResolveMatch[1];
+        }
+        
+        if (!missingFile) {
+          console.log('[BuildValidator] Could not extract file path from error');
+          continue;
+        }
+        
+        console.log(`[BuildValidator] Extracted path: ${missingFile}`);
+        
+        // Handle path aliases
+        let resolvedPath = missingFile;
+        if (missingFile.startsWith('@/')) {
+          // In Next.js, @/ typically maps to root or src/
+          // Check if src directory exists
+          const srcPath = path.join(workspacePath, 'src');
+          const srcExists = await fs.access(srcPath).then(() => true).catch(() => false);
+          
+          if (srcExists) {
+            // Pages Router with src directory
+            resolvedPath = missingFile.replace('@/', 'src/');
+          } else {
+            // App Router or no src directory
+            resolvedPath = missingFile.replace('@/', '');
+          }
+          console.log(`[BuildValidator] Resolved @/ alias: ${missingFile} -> ${resolvedPath}`);
+        }
+        
+        // Check if file already exists (try with and without extension)
+        const fullPath = path.join(workspacePath, resolvedPath);
+        let fileExists = false;
+          
+          try {
+            await fs.access(fullPath);
+            fileExists = true;
+          } catch {
+            // Try with common extensions if no extension provided
+            if (!path.extname(missingFile)) {
+              const extensions = ['.ts', '.tsx', '.js', '.jsx'];
+              for (const ext of extensions) {
+                try {
+                  await fs.access(fullPath + ext);
+                  fileExists = true;
+                  console.log(`[BuildValidator] File exists with extension: ${missingFile}${ext}`);
+                  break;
+                } catch {
+                  // Continue checking
+                }
+              }
+            }
+          }
+          
+          if (fileExists) {
+            console.log(`[BuildValidator] File already exists, checking for alias issue: ${missingFile}`);
+            
+            // If file exists but import fails, it's likely an alias configuration issue
+            if (error.includes('@/')) {
+              console.log(`[BuildValidator] Detected @/ alias issue, configuring jsconfig/tsconfig`);
+              
+              // Check if we need to update jsconfig.json or tsconfig.json
+              const configFile = projectLanguage === 'typescript' ? 'tsconfig.json' : 'jsconfig.json';
+              const configPath = path.join(workspacePath, configFile);
+              
+              try {
+                const configContent = await fs.readFile(configPath, 'utf-8');
+                const config = JSON.parse(configContent);
+                
+                // Add path mapping for @/
+                if (!config.compilerOptions) config.compilerOptions = {};
+                if (!config.compilerOptions.paths) config.compilerOptions.paths = {};
+                
+                config.compilerOptions.paths['@/*'] = ['./src/*'];
+                
+                fixes.push({
+                  type: 'update',
+                  path: configFile,
+                  content: JSON.stringify(config, null, 2)
+                });
+                
+                console.log(`[BuildValidator] Added @/ alias configuration to ${configFile}`);
+              } catch (err) {
+                // Create new config file with alias
+                const newConfig = {
+                  compilerOptions: {
+                    paths: {
+                      '@/*': ['./src/*']
+                    }
+                  }
+                };
+                
+                fixes.push({
+                  type: 'create',
+                  path: configFile,
+                  content: JSON.stringify(newConfig, null, 2)
+                });
+                
+                console.log(`[BuildValidator] Created ${configFile} with @/ alias configuration`);
+              }
+              continue;
+            }
+        } else {
+          // File doesn't exist, create stub
+          console.log(`[BuildValidator] File doesn't exist, creating: ${resolvedPath}`);
+          
+          // Special handling for common library files
+          let filePath = resolvedPath;
+            
+            // Ensure TypeScript files have .ts extension
+            if (projectLanguage === 'typescript' && !path.extname(filePath)) {
+              // Check if it's a known library file that should be .ts
+              if (filePath.includes('lib/prisma') || filePath.includes('lib/db')) {
+                filePath += '.ts';
+              } else if (filePath.includes('components/')) {
+                filePath += '.tsx';
+              } else {
+                filePath += '.ts';
+              }
+              console.log(`[BuildValidator] Added TypeScript extension: ${filePath}`);
+            }
+            
+            // Generate appropriate stub content
+            const stubContent = StubGenerator.generateStub(filePath, projectLanguage);
+            
+            fixes.push({
+              type: 'create',
+              path: filePath,
+              content: stubContent
+            });
+          }
+      }
+    }
+    
+    // Fix 2: Syntax errors with ESLint --fix
+    if (diagnosis.syntaxErrors && diagnosis.syntaxErrors.length > 0) {
+      console.log('[BuildValidator] Attempting to fix syntax errors with ESLint...');
+      
+      // Check if eslint is available
+      const eslintPath = path.join(workspacePath, 'node_modules', '.bin', 'eslint');
+      const hasEslint = await fs.access(eslintPath).then(() => true).catch(() => false);
+      
+      if (hasEslint) {
+        try {
+          const { exec } = await import('child_process');
+          const execPromise = promisify(exec);
+          
+          // Run ESLint --fix on all JS/TS files
+          console.log('[BuildValidator] Running ESLint --fix...');
+          await execPromise('npx eslint . --fix --ext .js,.jsx,.ts,.tsx', {
+            cwd: workspacePath,
+            timeout: 30000
+          });
+          
+          console.log('[BuildValidator] ESLint --fix completed');
+          // Return early as ESLint may have fixed the issues
+          return fixes;
+        } catch (error) {
+          console.log('[BuildValidator] ESLint --fix failed:', error.message);
+        }
+      } else {
+        console.log('[BuildValidator] ESLint not available, skipping syntax fixes');
+      }
+    }
+    
+    // Fix 3: Extension mismatches (language-aware)
+    if (diagnosis.extensionMismatch && diagnosis.extensionMismatch.length > 0) {
       console.log('[BuildValidator] Fixing file extension mismatches...');
+      
       for (const error of diagnosis.extensionMismatch) {
-        // Extract filename from error
-        const match = error.match(/route\.(js|ts)/);
+        // Use AI or patterns to detect the correct extension
+        const match = error.match(/expected\s+(\.\w+)\s+but\s+got\s+(\.\w+)/i);
         if (match) {
-          // Find all route.js files and rename to route.ts
+          const expectedExt = match[1];
+          const actualExt = match[2];
+          
+          // Find files with wrong extension and fix them
           for (const [filePath, content] of Object.entries(generatedFiles)) {
-            if (filePath.endsWith('route.js')) {
-              const newPath = filePath.replace('route.js', 'route.ts');
+            if (filePath.endsWith(actualExt)) {
+              const newPath = filePath.replace(actualExt, expectedExt);
               fixes.push({
                 type: 'rename',
                 oldPath: filePath,
@@ -233,45 +562,87 @@ class BuildValidator {
       }
     }
     
-    // Fix 2: Missing imports
-    if (diagnosis.missingImports.length > 0) {
-      console.log('[BuildValidator] Generating missing imports...');
-      const importFixes = await this.generateImportFixes(diagnosis.missingImports, workspacePath);
-      fixes.push(...importFixes);
+    // Fix 3: Missing dependencies (package manager agnostic)
+    if (diagnosis.missingDeps && diagnosis.missingDeps.length > 0) {
+      console.log('[BuildValidator] Detecting missing dependencies...');
+      
+      for (const error of diagnosis.missingDeps) {
+        // Extract package name from error
+        const packageMatch = error.match(/(?:package|module|dependency)\s+['"]?([^'"\s]+)['"]?\s+(?:not found|missing)/i);
+        if (packageMatch) {
+          const packageName = packageMatch[1];
+          
+          // Determine install command based on project type
+          let installCommand = null;
+          switch (projectLanguage) {
+            case 'javascript':
+            case 'typescript':
+              installCommand = buildInfo.buildTool?.includes('yarn') ? 
+                `yarn add ${packageName}` : `npm install ${packageName}`;
+              break;
+            case 'python':
+              installCommand = `pip install ${packageName}`;
+              break;
+            case 'java':
+              // Would need to update pom.xml or build.gradle
+              console.log(`[BuildValidator] Java dependency ${packageName} needs manual addition to build file`);
+              break;
+            case 'go':
+              installCommand = `go get ${packageName}`;
+              break;
+            case 'rust':
+              // Would need to update Cargo.toml
+              console.log(`[BuildValidator] Rust dependency ${packageName} needs manual addition to Cargo.toml`);
+              break;
+            case 'ruby':
+              installCommand = `gem install ${packageName}`;
+              break;
+            case 'php':
+              installCommand = `composer require ${packageName}`;
+              break;
+          }
+          
+          if (installCommand) {
+            fixes.push({
+              type: 'install',
+              command: installCommand,
+              package: packageName
+            });
+          }
+        }
+      }
     }
     
-    // Fix 3: Missing CSS files
-    if (diagnosis.missingFiles.some(e => e.includes('globals.css'))) {
-      console.log('[BuildValidator] Creating missing CSS files...');
-      fixes.push({
-        type: 'create',
-        path: 'styles/globals.css',
-        content: `/* Global styles */
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
-}
-
-html,
-body {
-  max-width: 100vw;
-  overflow-x: hidden;
-}
-
-a {
-  color: inherit;
-  text-decoration: none;
-}
-`
-      });
-    }
-    
-    // Fix 4: Type errors (use AI to fix)
-    if (diagnosis.typeErrors.length > 0 && this.anthropic) {
-      console.log('[BuildValidator] Using AI to fix type errors...');
-      const typeFixes = await this.generateAIFixes(diagnosis.typeErrors, generatedFiles);
-      fixes.push(...typeFixes);
+    // Fix 4: Type errors
+    // Type errors - check for specific patterns we can fix
+    if (diagnosis.typeErrors && diagnosis.typeErrors.length > 0) {
+      console.log(`[BuildValidator] Found ${diagnosis.typeErrors.length} type errors - checking for fixable patterns...`);
+      
+      for (const error of diagnosis.typeErrors) {
+        // Check for Prisma client errors
+        if (error.includes('PrismaClient') && (error.includes('Property') || error.includes('does not exist'))) {
+          console.log('[BuildValidator] Detected Prisma schema/client mismatch - will regenerate client');
+          fixes.push({
+            type: 'command',
+            command: 'npx prisma generate',
+            description: 'Regenerate Prisma client from schema'
+          });
+          break; // Only need to run once
+        }
+        
+        // Check for missing type definitions
+        if (error.includes('Cannot find type definition')) {
+          const typeMatch = error.match(/Cannot find type definition.*['"]([^'"]+)['"]/i);
+          if (typeMatch) {
+            console.log(`[BuildValidator] Missing type definition: ${typeMatch[1]}`);
+            // Could add @types package or create .d.ts file
+          }
+        }
+      }
+      
+      if (fixes.length === 0) {
+        console.log(`[BuildValidator] No automatic fixes available for ${diagnosis.typeErrors.length} type errors`);
+      }
     }
     
     return fixes;
@@ -310,51 +681,19 @@ a {
     return fixes;
   }
   
-  async generateAIFixes(typeErrors, generatedFiles) {
-    if (!this.anthropic) return [];
-    
-    try {
-      const prompt = `Fix these TypeScript errors. Return ONLY the fixed code, no explanations:
-
-Errors:
-${typeErrors.slice(0, 5).join('\n')}
-
-Current files:
-${Object.entries(generatedFiles).slice(0, 3).map(([path, content]) => 
-  `File: ${path}\n${String(content).slice(0, 500)}...`
-).join('\n\n')}
-
-Return a JSON object with file paths as keys and fixed content as values.`;
-
-      const message = await this.anthropic.messages.create({
-        model: 'claude-3-haiku-20240307', // Use fast model for fixes
-        max_tokens: 2048,
-        temperature: 0,
-        messages: [{ role: 'user', content: prompt }]
-      });
-      
-      const responseText = message.content[0].text;
-      const fixes = JSON.parse(responseText);
-      
-      return Object.entries(fixes).map(([filePath, content]) => ({
-        type: 'update',
-        path: filePath,
-        content: content
-      }));
-    } catch (error) {
-      console.error('[BuildValidator] AI fix generation failed:', error);
-      return [];
-    }
-  }
+  // Removed generateAIFixes - AI-based fixes were unreliable
+  // Now using deterministic fixes only (ESLint, file creation, etc.)
   
   async applyFixes(workspacePath, fixes) {
+    const { exec } = await import('child_process');
+    const execPromise = promisify(exec);
+    
     for (const fix of fixes) {
       try {
-        const fullPath = path.join(workspacePath, fix.path || fix.newPath);
-        
         switch (fix.type) {
           case 'create':
           case 'update':
+            const fullPath = path.join(workspacePath, fix.path);
             await fs.mkdir(path.dirname(fullPath), { recursive: true });
             await fs.writeFile(fullPath, fix.content, 'utf-8');
             console.log(`[BuildValidator] ${fix.type === 'create' ? 'Created' : 'Updated'}: ${fix.path}`);
@@ -362,14 +701,47 @@ Return a JSON object with file paths as keys and fixed content as values.`;
             
           case 'rename':
             const oldFullPath = path.join(workspacePath, fix.oldPath);
-            await fs.rename(oldFullPath, fullPath);
+            const newFullPath = path.join(workspacePath, fix.newPath);
+            await fs.rename(oldFullPath, newFullPath);
             console.log(`[BuildValidator] Renamed: ${fix.oldPath} → ${fix.newPath}`);
+            break;
+            
+          case 'install':
+            // Install missing dependency
+            console.log(`[BuildValidator] Installing dependency: ${fix.package}`);
+            try {
+              await execPromise(fix.command, { cwd: workspacePath });
+              console.log(`[BuildValidator] Installed: ${fix.package}`);
+            } catch (installError) {
+              console.error(`[BuildValidator] Failed to install ${fix.package}:`, installError.message);
+            }
+            break;
+            
+          case 'command':
+            // Run a command (like prisma generate)
+            console.log(`[BuildValidator] Running command: ${fix.command}`);
+            try {
+              const { stdout, stderr } = await execPromise(fix.command, { 
+                cwd: workspacePath,
+                timeout: 30000 // 30 second timeout
+              });
+              if (stdout) console.log(`[BuildValidator] Command output: ${stdout.substring(0, 200)}`);
+              if (stderr && !stderr.includes('warning')) {
+                console.error(`[BuildValidator] Command stderr: ${stderr.substring(0, 200)}`);
+              }
+              console.log(`[BuildValidator] ✅ Command completed: ${fix.description || fix.command}`);
+            } catch (cmdError) {
+              console.error(`[BuildValidator] Failed to run command:`, cmdError.message);
+            }
             break;
             
           case 'updateImport':
             // This would need to scan files and update import statements
             console.log(`[BuildValidator] Import fix needed: ${fix.from} → ${fix.to}`);
             break;
+            
+          default:
+            console.log(`[BuildValidator] Unknown fix type: ${fix.type}`);
         }
       } catch (error) {
         console.error(`[BuildValidator] Failed to apply fix:`, error);
@@ -540,11 +912,42 @@ export const contextEnhancedGenerator = [
         }
       }
       
-      // Create the enhanced prompt
+      // PHASE 4: Type-Aware Pre-Generation Analysis
+      let typeAnalysis = null;
+      let useTypeAware = false;
+      
+      // Check if project has TypeScript or complex schemas
+      const hasTypeScript = projectFiles.some(f => f.endsWith('.ts') || f.endsWith('.tsx'));
+      const hasPrisma = projectFiles.some(f => f.includes('prisma/schema.prisma'));
+      
+      if (hasTypeScript || hasPrisma) {
+        console.log('\n[Phase 4] Type-Aware Generation Enabled!');
+        try {
+          const typeAwareGen = new TypeAwareGenerator();
+          typeAnalysis = await typeAwareGen.analyzer.analyzeProject(workspace_path);
+          useTypeAware = true;
+          console.log('[Phase 4] Project analysis complete');
+        } catch (error) {
+          console.log('[Phase 4] Type analysis failed, falling back to standard generation:', error.message);
+        }
+      }
+      
+      // Create the enhanced prompt (with type context if available)
+      const typeContext = useTypeAware && typeAnalysis ? `
+## Type System Context:
+- Available Types: ${Array.from(typeAnalysis.types.keys()).slice(0, 20).join(', ')}
+- Prisma Models: ${typeAnalysis.schemas.prisma ? Object.keys(typeAnalysis.schemas.prisma.models).join(', ') : 'None'}
+- Import Style: ${typeAnalysis.patterns?.importStyle || 'mixed'}
+- Component Style: ${typeAnalysis.patterns?.componentStyle || 'function'}
+- Styling: ${typeAnalysis.patterns?.styling || 'css'}
+` : '';
+
       const prompt = `Task: ${task_title}
 Description: ${task_description || 'No additional description'}
 
 ${contextSection}
+
+${typeContext}
 
 ## Current Project State:
 - Total files: ${projectFiles.length}
@@ -565,13 +968,25 @@ IMPORTANT: These files exist - MODIFY them, don't create duplicates
 1. ${projectContext?.backendType ? 'USE EXISTING BACKEND - Do not create new backend infrastructure' : 'Create backend if needed for this task'}
 2. ${projectContext?.projectType ? `Follow ${projectContext.projectType} patterns and conventions` : 'Detect and follow project patterns'}
 3. ${projectContext?.ormType ? `Use existing ${projectContext.ormType} for database operations` : 'Set up database if needed'}
-4. Preserve ALL existing functionality
+4. Preserve ALL existing functionality - NEVER overwrite existing code
 5. Build incrementally on previous work
+6. When modifying existing files, provide modification instructions
 
 Output Format:
 Return a valid JSON object with:
 {
   "framework": "detected framework",
+  "operation_type": "modify" or "create" or "replace",
+  "modifications": {
+    "path/to/file.js": {
+      "type": "add_imports" | "add_functions" | "add_to_section" | "merge_objects",
+      "imports": ["array of import statements to add"],
+      "functions": [{"name": "functionName", "content": "function code"}],
+      "section": "section name to add to",
+      "content": "content to add",
+      "marker": "optional marker to insert after"
+    }
+  },
   "files": {
     "path/to/file": "file content with proper escaping"
   },
@@ -643,7 +1058,7 @@ Return ONLY valid JSON, no markdown or explanations.`;
         }
       }
       
-      // Write files to disk
+      // Write files to disk with intelligent merging
       const changes = [];
       if (generatedCode.files && workspace_path) {
         console.log(`[Context-Enhanced] Writing ${Object.keys(generatedCode.files).length} files to disk...`);
@@ -658,10 +1073,157 @@ Return ONLY valid JSON, no markdown or explanations.`;
           // Check if file exists
           const exists = await fs.access(fullPath).then(() => true).catch(() => false);
           
-          // Write the file - ensure content is a string
-          const fileContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+          // Prepare content as string
+          let fileContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+          
+          // If file exists and we're modifying, try to merge intelligently
+          if (exists && generatedCode.operation_type !== 'replace') {
+            console.log(`[Context-Enhanced] File exists: ${filePath}, attempting intelligent merge...`);
+            
+            try {
+              const existingContent = await fs.readFile(fullPath, 'utf-8');
+              
+              // Check if this is a modification with specific instructions
+              if (generatedCode.modifications && generatedCode.modifications[filePath]) {
+                // Apply specific modifications (like adding imports, functions, etc.)
+                fileContent = await applyFileModifications(
+                  existingContent, 
+                  fileContent,
+                  generatedCode.modifications[filePath]
+                );
+                console.log(`[Context-Enhanced] Applied targeted modifications to: ${filePath}`);
+              } else {
+                // Try to intelligently merge based on file type
+                const fileExt = path.extname(filePath);
+                
+                if (fileExt === '.json') {
+                  // For JSON files, try to merge objects
+                  try {
+                    const existingObj = JSON.parse(existingContent);
+                    const newObj = JSON.parse(fileContent);
+                    fileContent = JSON.stringify({ ...existingObj, ...newObj }, null, 2);
+                    console.log(`[Context-Enhanced] Merged JSON content for: ${filePath}`);
+                  } catch (e) {
+                    console.log(`[Context-Enhanced] Could not parse as JSON, replacing: ${filePath}`);
+                  }
+                } else if (fileExt === '.prisma') {
+                  // For Prisma schema files, merge models intelligently
+                  try {
+                    // Extract existing models
+                    const existingModels = existingContent.match(/model\s+\w+\s*{[^}]+}/g) || [];
+                    const existingModelNames = existingModels.map(m => {
+                      const match = m.match(/model\s+(\w+)/);
+                      return match ? match[1] : null;
+                    }).filter(Boolean);
+                    
+                    // Extract new models
+                    const newModels = fileContent.match(/model\s+\w+\s*{[^}]+}/g) || [];
+                    const newModelNames = newModels.map(m => {
+                      const match = m.match(/model\s+(\w+)/);
+                      return match ? match[1] : null;
+                    }).filter(Boolean);
+                    
+                    // Check for model name conflicts
+                    const conflictingModels = existingModelNames.filter(name => newModelNames.includes(name));
+                    
+                    if (conflictingModels.length > 0) {
+                      console.log(`[Context-Enhanced] Updating existing models in Prisma schema: ${conflictingModels.join(', ')}`);
+                      // Replace existing models with new versions
+                      let mergedContent = existingContent;
+                      for (const modelName of conflictingModels) {
+                        const oldModel = existingModels.find(m => m.includes(`model ${modelName}`));
+                        const newModel = newModels.find(m => m.includes(`model ${modelName}`));
+                        if (oldModel && newModel) {
+                          mergedContent = mergedContent.replace(oldModel, newModel);
+                        }
+                      }
+                      
+                      // Add new models that don't exist
+                      const uniqueNewModels = newModels.filter(m => {
+                        const modelName = m.match(/model\s+(\w+)/)?.[1];
+                        return modelName && !existingModelNames.includes(modelName);
+                      });
+                      
+                      if (uniqueNewModels.length > 0) {
+                        // Add new models at the end of the schema
+                        mergedContent = mergedContent.trimEnd() + '\n\n' + uniqueNewModels.join('\n\n') + '\n';
+                      }
+                      
+                      fileContent = mergedContent;
+                    } else {
+                      // No conflicts, just append new models
+                      console.log(`[Context-Enhanced] Adding new models to Prisma schema`);
+                      fileContent = existingContent.trimEnd() + '\n\n' + newModels.join('\n\n') + '\n';
+                    }
+                  } catch (e) {
+                    console.log(`[Context-Enhanced] Error merging Prisma schema, replacing: ${e.message}`);
+                  }
+                } else if (['.js', '.ts', '.jsx', '.tsx'].includes(fileExt)) {
+                  // For JavaScript/TypeScript files, try to append if it looks like additions
+                  // Check if new content references existing content (likely a modification)
+                  const existingFunctions = (existingContent.match(/(?:function|const|let|var)\s+(\w+)/g) || [])
+                    .map(m => m.split(/\s+/)[1]);
+                  const hasReferences = existingFunctions.some(fn => fileContent.includes(fn));
+                  
+                  if (!hasReferences && !fileContent.includes('export default')) {
+                    // Looks like new additions, append to existing
+                    console.log(`[Context-Enhanced] Appending new code to: ${filePath}`);
+                    
+                    // Remove duplicate imports
+                    const existingImports = existingContent.match(/^import .+$/gm) || [];
+                    const newImports = fileContent.match(/^import .+$/gm) || [];
+                    const uniqueNewImports = newImports.filter(imp => 
+                      !existingImports.some(existing => existing === imp)
+                    );
+                    
+                    // Remove imports from new content that are already in existing
+                    let cleanNewContent = fileContent;
+                    newImports.forEach(imp => {
+                      if (existingImports.includes(imp)) {
+                        cleanNewContent = cleanNewContent.replace(imp + '\n', '');
+                      }
+                    });
+                    
+                    // Append the cleaned content
+                    fileContent = existingContent + '\n\n' + cleanNewContent;
+                  } else {
+                    // Has references or exports, probably meant to replace
+                    console.log(`[Context-Enhanced] ⚠️ Warning: Replacing file with references: ${filePath}`);
+                  }
+                } else {
+                  // For other file types, default to replacement with warning
+                  console.log(`[Context-Enhanced] ⚠️ Warning: Replacing entire file content for: ${filePath}`);
+                  console.log(`[Context-Enhanced] Consider using modifications object for better preservation`);
+                }
+              }
+            } catch (error) {
+              console.error(`[Context-Enhanced] Error reading existing file: ${error.message}`);
+              // Fall back to overwriting if we can't read the file
+            }
+          }
+          
+          // PHASE 4: Pre-validate BEFORE writing (if type-aware is enabled)
+          if (useTypeAware && typeAnalysis) {
+            console.log(`[Phase 4] Pre-validating ${filePath}...`);
+            const validator = new TypeAwareGenerator().validator || new (await import('./type-aware-generator.js')).PreValidationSystem(workspace_path);
+            
+            const validation = await validator.validateBeforeWrite(
+              { [filePath]: fileContent },
+              typeAnalysis
+            );
+            
+            if (!validation.valid) {
+              console.log(`[Phase 4] Validation failed for ${filePath}:`, validation.issues);
+              // Still write the file but mark it as having issues
+              generatedFiles[filePath].validationIssues = validation.issues;
+            } else {
+              console.log(`[Phase 4] ✅ Validation passed for ${filePath}`);
+            }
+          }
+          
+          // Write the file
           await fs.writeFile(fullPath, fileContent, 'utf-8');
-          console.log(`[Context-Enhanced] Wrote file: ${filePath}`);
+          console.log(`[Context-Enhanced] ${exists ? 'Modified' : 'Created'} file: ${filePath}`);
           
           changes.push({
             path: filePath,
