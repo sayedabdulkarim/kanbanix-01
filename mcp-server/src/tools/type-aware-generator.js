@@ -787,6 +787,9 @@ export class TypeAwareGenerator {
   async fixValidationIssues(code, issues, analysis) {
     console.log(`[TypeAware] Fixing ${issues.length} validation issues...`);
     
+    // Track which packages need to be installed
+    const packagesToInstall = new Set();
+    
     for (const issue of issues) {
       switch (issue.type) {
         case 'missing-type-import':
@@ -799,14 +802,69 @@ export class TypeAwareGenerator {
           break;
           
         case 'missing-dependency':
-          console.log(`[TypeAware] Warning: Package ${issue.import} not installed`);
-          // Could auto-install here
+          console.log(`[TypeAware] Detected missing package: ${issue.import}`);
+          // Track packages to install
+          if (issue.import === '@prisma/client') {
+            packagesToInstall.add('@prisma/client');
+          } else if (!issue.import.startsWith('.') && !issue.import.startsWith('@/')) {
+            // It's an npm package
+            packagesToInstall.add(issue.import.split('/')[0]);
+          }
           break;
           
         case 'invalid-prisma-model':
-          console.log(`[TypeAware] Error: Invalid Prisma model ${issue.model}`);
-          // Would need to regenerate this part
+          console.log(`[TypeAware] Fixing Prisma model case: ${issue.model}`);
+          
+          // Check if it's just a case mismatch
+          if (analysis && analysis.schemas && analysis.schemas.prisma) {
+            const correctModel = Object.keys(analysis.schemas.prisma.models)
+              .find(m => m.toLowerCase() === issue.model.toLowerCase());
+            
+            if (correctModel && correctModel !== issue.model) {
+              // Fix the case in all files
+              for (const [file, content] of Object.entries(code)) {
+                if (typeof content === 'string') {
+                  // Replace prisma.todo with prisma.Todo (or similar)
+                  const regex = new RegExp(`prisma\\.${issue.model}(?=\\.)`, 'g');
+                  const newContent = content.replace(regex, `prisma.${correctModel}`);
+                  
+                  if (newContent !== content) {
+                    code[file] = newContent;
+                    console.log(`[TypeAware] Fixed model case in ${file}: ${issue.model} → ${correctModel}`);
+                  }
+                }
+              }
+            } else if (!correctModel) {
+              console.log(`[TypeAware] Model ${issue.model} not found in schema - might need to be added`);
+            }
+          }
           break;
+      }
+    }
+    
+    // Auto-install missing packages if any
+    if (packagesToInstall.size > 0 && this.projectPath) {
+      const packages = Array.from(packagesToInstall).join(' ');
+      console.log(`[TypeAware] Auto-installing missing packages: ${packages}`);
+      
+      try {
+        const { stdout, stderr } = await execPromise(`npm install ${packages}`, { 
+          cwd: this.projectPath,
+          timeout: 60000 // 60 second timeout
+        });
+        console.log(`[TypeAware] ✅ Successfully installed: ${packages}`);
+        
+        // If we installed Prisma client, also run prisma generate
+        if (packagesToInstall.has('@prisma/client')) {
+          console.log(`[TypeAware] Running prisma generate...`);
+          await execPromise('npx prisma generate', { 
+            cwd: this.projectPath,
+            timeout: 30000
+          });
+          console.log(`[TypeAware] ✅ Prisma client generated`);
+        }
+      } catch (error) {
+        console.error(`[TypeAware] Failed to install packages:`, error.message);
       }
     }
     

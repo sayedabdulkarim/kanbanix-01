@@ -477,8 +477,22 @@ export class AIAgentService {
       return mcpResult;
     }
     
+    // Detect if this is a new project/boilerplate request
+    const isNewProjectRequest = /\b(create|init|initialize|setup|start|scaffold|bootstrap|new|fresh|blank|empty)\s+(a\s+)?(new\s+)?(\w+\s+)?(project|app|application|boiler\s*plate|starter|template)/i.test(
+      input.title + ' ' + (input.description || '')
+    );
+
+    // Use appropriate tool based on task type
+    const toolName = isNewProjectRequest ? 'generate_task_code' : 'generate_code_with_context';
+
+    await this.addExecutionLog(
+      executionId,
+      'info',
+      `🔧 Using ${toolName} tool (${isNewProjectRequest ? 'new project detected' : 'incremental feature'})`
+    );
+
     // Original single-shot generation (Phase 1)
-    const mcpResult = await this.callMCPTool('generate_code_with_context', {
+    const mcpResult = await this.callMCPTool(toolName, {
       task_title: input.title,
       task_description: input.description,
       project_id: execution.task.projectId, // For context lookup
@@ -690,7 +704,8 @@ export class AIAgentService {
             tool: toolName,
             params: {
               ...params,
-              projectId: params.projectId || params.context?.projectId,
+              projectId: params.projectId || params.project_id || params.context?.projectId,
+              workspacePath: params.workspacePath || params.workspace_path || params.context?.workspacePath,
               executionId // Pass executionId for log streaming
             }
           })

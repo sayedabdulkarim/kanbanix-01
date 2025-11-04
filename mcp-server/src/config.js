@@ -6,7 +6,7 @@ export const mcpConfig = {
   // Claude API configuration (only used in 'api' mode)
   claude: {
     apiKey: process.env.ANTHROPIC_API_KEY,
-    model: process.env.CLAUDE_MODEL || 'claude-3-opus-20240229',
+    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929',
     maxTokens: parseInt(process.env.CLAUDE_MAX_TOKENS || '4096'),
     temperature: parseFloat(process.env.CLAUDE_TEMPERATURE || '0.7'),
   },

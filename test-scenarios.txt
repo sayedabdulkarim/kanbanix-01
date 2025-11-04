@@ -1,0 +1,25 @@
+PHASE 4 TEST SCENARIOS
+======================
+
+Project: Create fresh Next.js boilerplate first
+Command: npx create-next-app@latest test-project --typescript --tailwind --app --no-eslint
+
+SCENARIO 1: Simple Component
+Task: Create a Button component with click counter
+
+SCENARIO 2: API with Database
+Task: Create a user registration API with Prisma and SQLite database
+
+SCENARIO 3: Complex UI with State
+Task: Add a shopping cart feature with add/remove items and total calculation
+
+SCENARIO 4: Third-party Integration
+Task: Integrate Stripe payment processing for checkout
+
+SCENARIO 5: Real-time Features
+Task: Add a chat system using WebSockets with Socket.io
+
+
+//
+add the above task 1 by 1 to check whether code is geenrated properly or not .  
+and copy the project after completion each task , in nextJs folder . to check the build and running the app.

@@ -324,6 +324,10 @@ class BuildValidator {
                error.match(/expected '\.ts' extension/i)) {
         categorized.extensionMismatch.push(error);
       }
+      // TailwindCSS v4 PostCSS issue
+      else if (error.includes("tailwindcss") && error.includes("PostCSS plugin")) {
+        categorized.missingDeps.push(error);
+      }
       // Everything else
       else {
         categorized.other.push(error);
@@ -535,7 +539,62 @@ class BuildValidator {
       }
     }
     
-    // Fix 3: Extension mismatches (language-aware)
+    // Fix 3: Missing dependencies
+    if (diagnosis.missingDeps && diagnosis.missingDeps.length > 0) {
+      console.log('[BuildValidator] Fixing missing dependencies...');
+      
+      // Check for TailwindCSS v4 PostCSS issue
+      const hasTailwindIssue = diagnosis.missingDeps.some(err => 
+        err.includes("tailwindcss") && err.includes("PostCSS plugin")
+      );
+      
+      if (hasTailwindIssue) {
+        console.log('[BuildValidator] Detected TailwindCSS v4 PostCSS issue');
+        
+        // Install @tailwindcss/postcss
+        try {
+          const { exec } = await import('child_process');
+          const execPromise = promisify(exec);
+          
+          console.log('[BuildValidator] Installing @tailwindcss/postcss...');
+          await execPromise('npm install @tailwindcss/postcss', {
+            cwd: workspacePath,
+            timeout: 60000
+          });
+          
+          // Update postcss.config.js
+          const postcssPath = path.join(workspacePath, 'postcss.config.js');
+          const postcssExists = await fs.access(postcssPath).then(() => true).catch(() => false);
+          
+          if (postcssExists) {
+            let content = await fs.readFile(postcssPath, 'utf-8');
+            content = content.replace('tailwindcss: {}', "'@tailwindcss/postcss': {}");
+            await fs.writeFile(postcssPath, content);
+            console.log('[BuildValidator] Updated postcss.config.js for TailwindCSS v4');
+          }
+          
+          // Update tsconfig.json moduleResolution if needed
+          const tsconfigPath = path.join(workspacePath, 'tsconfig.json');
+          const tsconfigExists = await fs.access(tsconfigPath).then(() => true).catch(() => false);
+          
+          if (tsconfigExists) {
+            let content = await fs.readFile(tsconfigPath, 'utf-8');
+            content = content.replace('"moduleResolution": "node"', '"moduleResolution": "bundler"');
+            await fs.writeFile(tsconfigPath, content);
+            console.log('[BuildValidator] Updated tsconfig.json moduleResolution to bundler');
+          }
+          
+          fixes.push({
+            type: 'dependency',
+            action: 'installed @tailwindcss/postcss and updated configs'
+          });
+        } catch (error) {
+          console.error('[BuildValidator] Failed to fix TailwindCSS issue:', error);
+        }
+      }
+    }
+    
+    // Fix 4: Extension mismatches (language-aware)
     if (diagnosis.extensionMismatch && diagnosis.extensionMismatch.length > 0) {
       console.log('[BuildValidator] Fixing file extension mismatches...');
       
@@ -1007,11 +1066,16 @@ Return ONLY valid JSON, no markdown or explanations.`;
       let message;
       let retries = 3;
       let delay = 2000; // Start with 2 second delay
-      
+
+      // Debug: Log actual model being used
+      const modelToUse = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
+      console.log(`[DEBUG] Using Claude model: ${modelToUse}`);
+      console.log(`[DEBUG] CLAUDE_MODEL env var: ${process.env.CLAUDE_MODEL}`);
+
       while (retries > 0) {
         try {
           message = await anthropic.messages.create({
-            model: 'claude-3-5-sonnet-latest',  // This should map to Sonnet 4
+            model: modelToUse,
             max_tokens: 4096,
             temperature: 0.7,
             messages: [{
@@ -1203,10 +1267,14 @@ Return ONLY valid JSON, no markdown or explanations.`;
           }
           
           // PHASE 4: Pre-validate BEFORE writing (if type-aware is enabled)
+          let shouldWriteFile = true;
+          
           if (useTypeAware && typeAnalysis) {
             console.log(`[Phase 4] Pre-validating ${filePath}...`);
-            const validator = new TypeAwareGenerator().validator || new (await import('./type-aware-generator.js')).PreValidationSystem(workspace_path);
-            
+            const TypeAwareGen = await import('./type-aware-generator.js');
+            const generator = new TypeAwareGen.TypeAwareGenerator();
+            const validator = new TypeAwareGen.PreValidationSystem(workspace_path);
+
             const validation = await validator.validateBeforeWrite(
               { [filePath]: fileContent },
               typeAnalysis
@@ -1214,21 +1282,45 @@ Return ONLY valid JSON, no markdown or explanations.`;
             
             if (!validation.valid) {
               console.log(`[Phase 4] Validation failed for ${filePath}:`, validation.issues);
-              // Still write the file but mark it as having issues
-              generatedFiles[filePath].validationIssues = validation.issues;
+              
+              // Try to auto-fix the issues
+              console.log(`[Phase 4] Attempting to auto-fix ${validation.issues.length} issues...`);
+              const fixedContent = await generator.fixValidationIssues(
+                fileContent,
+                validation.issues,
+                typeAnalysis
+              );
+              
+              if (fixedContent && fixedContent !== fileContent) {
+                console.log(`[Phase 4] ✅ Auto-fixed issues in ${filePath}`);
+                fileContent = fixedContent;
+                shouldWriteFile = true;
+              } else {
+                console.log(`[Phase 4] ❌ Could not auto-fix issues in ${filePath}, skipping file`);
+                shouldWriteFile = false;
+                // Track validation issues for reporting
+                if (!generatedCode.validationIssues) {
+                  generatedCode.validationIssues = {};
+                }
+                generatedCode.validationIssues[filePath] = validation.issues;
+              }
             } else {
               console.log(`[Phase 4] ✅ Validation passed for ${filePath}`);
             }
           }
           
-          // Write the file
-          await fs.writeFile(fullPath, fileContent, 'utf-8');
-          console.log(`[Context-Enhanced] ${exists ? 'Modified' : 'Created'} file: ${filePath}`);
-          
-          changes.push({
-            path: filePath,
-            type: exists ? 'modified' : 'created'
-          });
+          // Only write the file if validation passed or issues were fixed
+          if (shouldWriteFile) {
+            await fs.writeFile(fullPath, fileContent, 'utf-8');
+            console.log(`[Context-Enhanced] ${exists ? 'Modified' : 'Created'} file: ${filePath}`);
+            
+            changes.push({
+              path: filePath,
+              type: exists ? 'modified' : 'created'
+            });
+          } else {
+            console.log(`[Context-Enhanced] ⚠️ Skipped writing ${filePath} due to validation errors`);
+          }
         }
       }
       

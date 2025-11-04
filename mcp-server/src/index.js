@@ -8,8 +8,16 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load .env file from the mcp-server directory
-dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
+// Load .env file from the mcp-server directory (with override)
+dotenv.config({
+  path: path.resolve(__dirname, '..', '.env'),
+  override: true  // Force override existing env vars
+});
+
+// Debug: Log loaded environment variables
+console.error('[ENV DEBUG] CLAUDE_MODEL:', process.env.CLAUDE_MODEL);
+console.error('[ENV DEBUG] ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? 'SET' : 'NOT SET');
+console.error('[ENV DEBUG] MCP_MODE:', process.env.MCP_MODE);
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';

@@ -254,7 +254,7 @@ export const projectTools = [
 
   {
     name: 'generate_task_code',
-    description: 'Generate code implementation for a task using AI',
+    description: 'Generate code implementation for a task using AI - includes npx create-next-app for new projects',
     inputSchema: {
       type: 'object',
       properties: {
@@ -266,20 +266,32 @@ export const projectTools = [
           type: 'string',
           description: 'Task description',
         },
+        project_id: {
+          type: 'string',
+          description: 'Project ID for context lookup',
+        },
+        workspace_path: {
+          type: 'string',
+          description: 'Path to the workspace',
+        },
         context: {
           type: 'object',
           description: 'Task context including project path',
         },
+        executionId: {
+          type: 'string',
+          description: 'Execution ID for tracking',
+        },
       },
       required: ['task_title'],
     },
-    handler: async ({ task_title, task_description, context }) => {
+    handler: async ({ task_title, task_description, project_id, workspace_path, context, executionId }) => {
+      // For backward compatibility, extract workspacePath from context if not provided directly
+      const workspacePath = workspace_path || context?.projectPath || context?.workspacePath || PROJECT_ROOT;
       const changes = [];
-      
+
       try {
-        // Get workspace path
-        const workspacePath = context?.projectPath || context?.workspacePath || PROJECT_ROOT;
-        console.log(`Working in project path: ${workspacePath}`);
+        console.log(`[generate_task_code] Working in project path: ${workspacePath}`);
         
         // Check if project is empty
         const isEmptyProject = await checkIfProjectIsEmpty(workspacePath);
@@ -708,8 +720,10 @@ Return a JSON object with search terms:
           
           // Ask Claude to generate/modify code for the existing project
           console.log('Calling Claude API to generate feature code...');
+          const modelToUse = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
+          console.log(`[generate_task_code] Using Claude model: ${modelToUse}`);
           const message = await anthropic.messages.create({
-            model: 'claude-3-5-sonnet-20241022', // Using the model from SynthAI
+            model: modelToUse,
             max_tokens: 4096,
             temperature: 0.7,
             messages: [{
