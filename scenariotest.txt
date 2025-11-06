@@ -1,0 +1,84 @@
+================================================================================
+KANBANIX AI ERROR FIXING - TEST SCENARIOS
+================================================================================
+
+PROJECT 1: Counter App - (please add  Counter App to our main page)
+----------------------
+1. Create a Next.js blank project
+2. Create a Counter component with increment and decrement buttons
+3. Add a reset button to Counter
+4. Create a Header component with app title
+5. Add Header to the home page
+
+PROJECT 2: Todo App
+-------------------
+1. Create a Next.js blank project
+2. Create a TodoList component with add todo input
+3. Add delete button to each todo item
+4. Create a Footer component with copyright
+5. Add Footer to the home page
+
+PROJECT 3: Blog App
+-------------------
+1. Create a Next.js blank project
+2. Create a Navbar component with logo and links
+3. Create a BlogPost card component
+4. Create a blog list page displaying multiple posts
+5. Create a dynamic [slug] page for individual posts
+
+PROJECT 4: Dashboard
+--------------------
+1. Create a Next.js blank project with Tailwind
+2. Create a Sidebar navigation component
+3. Create a Stats card component showing numbers
+4. Create a dashboard page with 4 stat cards
+5. Add a dark mode toggle button
+
+PROJECT 5: E-commerce
+---------------------
+1. Create a Next.js blank project with Tailwind
+2. Create a ProductCard component with image and price
+3. Create a product grid showing 6 products
+4. Add a shopping cart icon to header
+5. Create a cart page showing selected products
+
+PROJECT 6: API Integration
+---------------------------
+1. Create a Next.js blank project
+2. Create Prisma schema with User model
+3. Create GET /api/users endpoint
+4. Create POST /api/users endpoint
+5. Create a users list page fetching from API
+
+PROJECT 7: Auth App
+-------------------
+1. Create a Next.js blank project
+2. Create a login form component
+3. Create a signup form component
+4. Create a protected dashboard page
+5. Add logout button in header
+
+PROJECT 8: Image Gallery
+-------------------------
+1. Create a Next.js blank project
+2. Create an ImageCard component using next/image
+3. Create a grid layout with 9 images
+4. Add a lightbox modal to view full image
+5. Add image upload form
+
+================================================================================
+TRACKING TEMPLATE
+================================================================================
+
+PROJECT: [Name]
+Date: [Date]
+
+| Task | Status | Attempts | Notes |
+|------|--------|----------|-------|
+| 1    | ✅/❌   | 1-5      |       |
+| 2    | ✅/❌   | 1-5      |       |
+| 3    | ✅/❌   | 1-5      |       |
+| 4    | ✅/❌   | 1-5      |       |
+| 5    | ✅/❌   | 1-5      |       |
+
+Success Rate: X/5
