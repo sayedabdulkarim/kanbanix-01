@@ -235,11 +235,20 @@ async function applyFileModifications(existingContent, newContent, modifications
       console.log('[Context-Enhanced] Not JSON content, using full replacement');
       result = newContent;
     }
+  } else if (modifications.type === 'replace_content') {
+    // Complete file replacement with new content from modifications.content
+    if (modifications.content) {
+      result = modifications.content;
+      console.log('[Context-Enhanced] Replacing entire file content');
+    } else {
+      console.error('[Context-Enhanced] replace_content type requires "content" property');
+      result = existingContent; // Keep existing if no content provided
+    }
   } else {
     // Default: Use the new content if no specific modification type
     result = newContent;
   }
-  
+
   return result;
 }
 
@@ -1939,7 +1948,7 @@ Return a valid JSON object with:
   "operation_type": "modify" or "create" or "replace",
   "modifications": {
     "path/to/file.js": {
-      "type": "add_imports" | "add_functions" | "add_to_section" | "add_jsx_element" | "merge_objects",
+      "type": "add_imports" | "add_functions" | "add_to_section" | "add_jsx_element" | "merge_objects" | "replace_content",
       "imports": ["array of import statements to add"],
       "jsx_element": {
         "element": "ComponentName",
@@ -1948,7 +1957,7 @@ Return a valid JSON object with:
       },
       "functions": [{"name": "functionName", "content": "function code"}],
       "section": "section name to add to",
-      "content": "content to add",
+      "content": "full file content (for replace_content type) or content to add (for add_to_section type)",
       "marker": "optional marker to insert after"
     }
   },
@@ -2242,29 +2251,49 @@ Return ONLY valid JSON, no markdown or explanations.`;
 
           for (const filePath of modificationOnlyFiles) {
             const fullPath = path.join(workspace_path, filePath);
+            const modification = generatedCode.modifications[filePath];
 
             try {
-              // Read existing file
-              const existingContent = await fs.readFile(fullPath, 'utf-8');
-              console.log(`[Context-Enhanced] Applying modifications to existing file: ${filePath}`);
+              // Check if file exists
+              const exists = await fs.access(fullPath).then(() => true).catch(() => false);
 
-              // Apply modifications (note: passing empty string as newContent since we only have modifications)
-              const modifiedContent = await applyFileModifications(
-                existingContent,
-                '', // No new content, only modifications
-                generatedCode.modifications[filePath]
-              );
+              if (!exists && modification.type === 'replace_content' && modification.content) {
+                // File doesn't exist but we have content to create it with
+                const dir = path.dirname(fullPath);
+                await fs.mkdir(dir, { recursive: true });
 
-              // Write modified file back
-              await fs.writeFile(fullPath, modifiedContent, 'utf-8');
-              console.log(`[Context-Enhanced] ✅ Modified file: ${filePath}`);
+                await fs.writeFile(fullPath, modification.content, 'utf-8');
+                console.log(`[Context-Enhanced] ✅ Created new file: ${filePath}`);
 
-              changes.push({
-                path: filePath,
-                type: 'modified'
-              });
+                changes.push({
+                  path: filePath,
+                  type: 'created'
+                });
+              } else if (exists) {
+                // File exists, read and apply modifications
+                const existingContent = await fs.readFile(fullPath, 'utf-8');
+                console.log(`[Context-Enhanced] Applying modifications to existing file: ${filePath}`);
+
+                // Apply modifications (note: passing empty string as newContent since we only have modifications)
+                const modifiedContent = await applyFileModifications(
+                  existingContent,
+                  '', // No new content, only modifications
+                  modification
+                );
+
+                // Write modified file back
+                await fs.writeFile(fullPath, modifiedContent, 'utf-8');
+                console.log(`[Context-Enhanced] ✅ Modified file: ${filePath}`);
+
+                changes.push({
+                  path: filePath,
+                  type: 'modified'
+                });
+              } else {
+                console.error(`[Context-Enhanced] ❌ File ${filePath} doesn't exist and no content provided to create it`);
+              }
             } catch (error) {
-              console.error(`[Context-Enhanced] ❌ Failed to apply modifications to ${filePath}:`, error.message);
+              console.error(`[Context-Enhanced] ❌ Failed to process ${filePath}:`, error.message);
             }
           }
         }

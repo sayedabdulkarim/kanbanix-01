@@ -6,6 +6,7 @@ PROJECT 1: Counter App - (please add  Counter App to our main page)
 ----------------------
 1. Create a Next.js boilerplate
 2. Create a Counter component with increment and decrement buttons
+   - Remove all Next.js boilerplate content except the Counter component
 3. Add a reset button to Counter
 4. Create a Header component with app title
 5. Add Header to the home page
