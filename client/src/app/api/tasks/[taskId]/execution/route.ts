@@ -35,6 +35,11 @@ export async function GET(
         }
       },
       include: {
+        task: {
+          select: {
+            diffs: true
+          }
+        },
         logs: {
           orderBy: {
             timestamp: 'asc'
@@ -60,12 +65,39 @@ export async function GET(
         changes = [];
       }
     }
-    
+
     // Ensure changes is an array
     if (!Array.isArray(changes)) {
       changes = [];
     }
-    
+
+    // If execution changes are empty, check task diffs
+    if (changes.length === 0 && execution.task?.diffs) {
+      try {
+        const taskDiffs = typeof execution.task.diffs === 'string'
+          ? JSON.parse(execution.task.diffs)
+          : execution.task.diffs;
+
+        // Task diffs are an array of diff versions, get the latest
+        if (Array.isArray(taskDiffs) && taskDiffs.length > 0) {
+          const latestDiff = taskDiffs[taskDiffs.length - 1];
+
+          // Convert task diff format to changes format
+          if (latestDiff.files && Array.isArray(latestDiff.files)) {
+            changes = latestDiff.files.map((file: any) => ({
+              path: file.filePath || file.path, // FileDiff uses 'filePath' property
+              type: file.status || 'modified',
+              additions: file.additions || 0,
+              deletions: file.deletions || 0
+            }));
+            console.log(`Using task diffs: ${changes.length} files from diff version ${latestDiff.version}`);
+          }
+        }
+      } catch (e) {
+        console.error('Error parsing task diffs:', e);
+      }
+    }
+
     console.log('Execution API - changes count:', changes.length);
     
     // Parse metadata in logs

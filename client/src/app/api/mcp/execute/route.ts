@@ -269,13 +269,13 @@ async function executeMCPTool(toolName: string, params: any): Promise<any> {
     console.log('Sending MCP request:', JSON.stringify(request));
     mcpProcess.stdin.write(JSON.stringify(request) + '\n');
 
-    // Set timeout - increased for create-next-app which can take longer
+    // Set timeout - increased for boilerplate creation with package installation
     const timeout = setTimeout(() => {
       if (!responseReceived) {
         mcpProcess.kill();
         reject(new Error('MCP tool execution timeout'));
       }
-    }, 120000); // 120 second timeout for longer operations like create-next-app
+    }, 300000); // 300 second (5 minute) timeout for boilerplate creation with npm/yarn install
 
     // Handle process close
     mcpProcess.on('close', (code) => {

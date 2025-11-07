@@ -77,6 +77,7 @@ export async function GET(
       dueDate: task.dueDate,
       timeEstimate: task.timeEstimate,
       timeSpent: task.timeSpent,
+      diffs: task.diffs,
       assignee: task.assignee,
       labels: task.labels,
       comments: task.comments.map(comment => ({
