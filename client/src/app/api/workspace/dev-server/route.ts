@@ -779,8 +779,50 @@ export async function DELETE(request: NextRequest) {
       });
     }
 
-    // Kill the process
-    server.process.kill('SIGTERM');
+    // Kill the process and all child processes
+    try {
+      const pid = server.process.pid;
+      if (pid) {
+        // On Unix-like systems (macOS/Linux), kill the entire process group
+        // This ensures all child processes are killed too
+        if (process.platform !== 'win32') {
+          // First try to kill the process group (negative PID)
+          try {
+            process.kill(-pid, 'SIGTERM');
+            console.log(`Sent SIGTERM to process group ${pid}`);
+          } catch (e) {
+            // If process group doesn't exist, just kill the main process
+            process.kill(pid, 'SIGTERM');
+            console.log(`Sent SIGTERM to process ${pid}`);
+          }
+
+          // Wait a bit, then force kill if still alive
+          setTimeout(() => {
+            try {
+              process.kill(-pid, 'SIGKILL');
+            } catch (e) {
+              // Process already dead, which is fine
+            }
+          }, 1000);
+        } else {
+          // Windows: just kill the process
+          server.process.kill('SIGTERM');
+        }
+
+        // Also kill any process using the port (cleanup)
+        const { exec } = require('child_process');
+        exec(`lsof -ti:${server.port} | xargs kill -9 2>/dev/null || true`, (error: any) => {
+          if (!error) {
+            console.log(`Cleaned up port ${server.port}`);
+          }
+        });
+      } else {
+        server.process.kill('SIGTERM');
+      }
+    } catch (e) {
+      console.error(`Error killing process:`, e);
+    }
+
     devServers.delete(projectId);
 
     console.log(`Stopped dev server for project ${projectId}`);

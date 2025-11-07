@@ -791,6 +791,7 @@ Return a single valid JSON object with file paths as keys and code content as va
 }
 
 Requirements:
+- **CRITICAL**: When creating new projects or adding dependencies, ALWAYS use the LATEST STABLE versions (e.g., Next.js 15+, React 19+, not outdated versions like 14.x or 18.x)
 - Use the existing project's patterns and structure
 - IMPORTANT: Use the CSS framework that's already in the project (Tailwind, Bootstrap, Material UI, etc.)
 - If project uses Tailwind, use Tailwind classes. If Bootstrap, use Bootstrap classes. Match the existing style approach.

@@ -4,7 +4,7 @@ KANBANIX AI ERROR FIXING - TEST SCENARIOS
 
 PROJECT 1: Counter App - (please add  Counter App to our main page)
 ----------------------
-1. Create a Next.js blank project
+1. Create a Next.js boilerplate
 2. Create a Counter component with increment and decrement buttons
 3. Add a reset button to Counter
 4. Create a Header component with app title

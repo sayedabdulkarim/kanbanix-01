@@ -8,6 +8,7 @@ import { promisify } from 'util';
 import { buildSystemDetector } from './build-system-detector.js';
 import { StubGenerator } from './stub-generator.js';
 import TypeAwareGenerator from './type-aware-generator.js';
+import { mcpConfig } from '../config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -342,13 +343,16 @@ class BuildValidator {
   
   async generateTargetedFixes(diagnosis, generatedFiles, workspacePath) {
     const fixes = [];
-    
+
     // Detect project language for context
     const buildInfo = await buildSystemDetector.detect(workspacePath);
     const projectLanguage = buildInfo.language || 'unknown';
-    
+
     console.log(`[BuildValidator] Generating fixes for ${projectLanguage} project`);
-    
+
+    // PHASE 1: Fast deterministic fixes (no AI needed)
+    console.log('[BuildValidator] Phase 1: Applying deterministic fixes...');
+
     // Fix 1: Missing files/imports
     const allMissingFileErrors = [...(diagnosis.missingFiles || []), ...(diagnosis.missingImports || [])];
     if (allMissingFileErrors.length > 0) {
@@ -672,11 +676,10 @@ class BuildValidator {
       }
     }
     
-    // Fix 4: Type errors
-    // Type errors - check for specific patterns we can fix
+    // Fix 4: Quick pattern-based type error fixes
     if (diagnosis.typeErrors && diagnosis.typeErrors.length > 0) {
-      console.log(`[BuildValidator] Found ${diagnosis.typeErrors.length} type errors - checking for fixable patterns...`);
-      
+      console.log(`[BuildValidator] Checking ${diagnosis.typeErrors.length} type errors for simple patterns...`);
+
       for (const error of diagnosis.typeErrors) {
         // Check for Prisma client errors
         if (error.includes('PrismaClient') && (error.includes('Property') || error.includes('does not exist'))) {
@@ -688,23 +691,390 @@ class BuildValidator {
           });
           break; // Only need to run once
         }
-        
-        // Check for missing type definitions
-        if (error.includes('Cannot find type definition')) {
-          const typeMatch = error.match(/Cannot find type definition.*['"]([^'"]+)['"]/i);
-          if (typeMatch) {
-            console.log(`[BuildValidator] Missing type definition: ${typeMatch[1]}`);
-            // Could add @types package or create .d.ts file
-          }
-        }
-      }
-      
-      if (fixes.length === 0) {
-        console.log(`[BuildValidator] No automatic fixes available for ${diagnosis.typeErrors.length} type errors`);
       }
     }
-    
+
+    // PHASE 2: AI-powered fixes for complex errors
+    console.log('[BuildValidator] Phase 2: AI-powered error fixing...');
+
+    // Collect all complex errors that need AI fixing
+    const complexErrors = [
+      ...(diagnosis.typeErrors || []),
+      ...(diagnosis.syntaxErrors || []),
+      ...(diagnosis.other || [])
+    ].filter(error => {
+      // Filter out errors we already fixed deterministically
+      const alreadyFixed =
+        fixes.some(fix => fix.type === 'command' && fix.command.includes('prisma')) ||
+        fixes.some(fix => error.includes(fix.path));
+      return !alreadyFixed;
+    });
+
+    if (complexErrors.length > 0) {
+      console.log(`[BuildValidator] Using AI to fix ${complexErrors.length} complex errors...`);
+      const aiFixes = await this.generateAIFixes(complexErrors, workspacePath, generatedFiles);
+      fixes.push(...aiFixes);
+    } else {
+      console.log('[BuildValidator] No complex errors requiring AI fixing');
+    }
+
     return fixes;
+  }
+
+  /**
+   * AI-powered error fixing system
+   * Uses Claude to intelligently fix code errors
+   */
+  async generateAIFixes(errors, workspacePath, generatedFiles) {
+    const fixes = [];
+
+    if (!this.anthropic) {
+      console.log('[BuildValidator] Anthropic client not available, skipping AI fixes');
+      return fixes;
+    }
+
+    // Group errors by file for efficient processing
+    const errorsByFile = this.groupErrorsByFile(errors);
+
+    console.log(`[BuildValidator] Grouped ${errors.length} errors into ${Object.keys(errorsByFile).length} files`);
+
+    // Process each file with errors
+    for (const [filePath, fileErrors] of Object.entries(errorsByFile)) {
+      try {
+        console.log(`[BuildValidator] AI fixing ${fileErrors.length} errors in ${filePath}...`);
+
+        // Read the problematic file
+        const fullPath = path.join(workspacePath, filePath);
+        let currentContent;
+
+        try {
+          currentContent = await fs.readFile(fullPath, 'utf-8');
+        } catch (readError) {
+          console.log(`[BuildValidator] Could not read ${filePath}, skipping AI fix`);
+          continue;
+        }
+
+        // Build the prompt for AI
+        const prompt = this.buildErrorFixPrompt(filePath, currentContent, fileErrors, workspacePath);
+
+        // Call AI with retry logic
+        let response;
+        let retries = 2;
+
+        while (retries > 0) {
+          try {
+            response = await this.anthropic.messages.create({
+              model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929',
+              max_tokens: 4096,
+              temperature: 0.1, // Low temperature for consistent, deterministic fixes
+              messages: [{
+                role: 'user',
+                content: prompt
+              }]
+            });
+            break; // Success
+          } catch (error) {
+            if (error.status === 529 && retries > 1) {
+              console.log(`[BuildValidator] API overloaded, retrying...`);
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              retries--;
+            } else {
+              throw error;
+            }
+          }
+        }
+
+        if (!response) {
+          console.log(`[BuildValidator] Failed to get AI response for ${filePath}`);
+          continue;
+        }
+
+        // Extract fixed code from response
+        const fixedCode = this.extractCodeFromAIResponse(response.content[0].text);
+
+        if (!fixedCode) {
+          console.log(`[BuildValidator] Could not extract code from AI response for ${filePath}`);
+          continue;
+        }
+
+        // Validate the fix is actually different and looks valid
+        if (fixedCode === currentContent) {
+          console.log(`[BuildValidator] AI returned unchanged code for ${filePath}`);
+          continue;
+        }
+
+        if (!this.validateFixedCode(fixedCode, currentContent)) {
+          console.log(`[BuildValidator] AI fix validation failed for ${filePath}`);
+          continue;
+        }
+
+        // Add the fix
+        fixes.push({
+          type: 'update',
+          path: filePath,
+          content: fixedCode,
+          description: `AI fixed ${fileErrors.length} error(s): ${fileErrors[0].substring(0, 80)}...`
+        });
+
+        console.log(`[BuildValidator] ✅ AI successfully generated fix for ${filePath}`);
+
+      } catch (error) {
+        console.error(`[BuildValidator] AI fix failed for ${filePath}:`, error.message);
+        // Continue with other files even if one fails
+      }
+    }
+
+    if (fixes.length > 0) {
+      console.log(`[BuildValidator] ✅ AI generated ${fixes.length} fixes`);
+    } else {
+      console.log(`[BuildValidator] ⚠️ AI could not generate any fixes`);
+    }
+
+    return fixes;
+  }
+
+  /**
+   * Group errors by the file they occurred in
+   */
+  groupErrorsByFile(errors) {
+    const grouped = {};
+
+    for (const error of errors) {
+      // Extract file path from error message
+      // Common patterns:
+      // - ./src/app/page.tsx:1:8
+      // - src/components/Counter.tsx:25:10
+      // - Type error in /full/path/to/file.tsx
+
+      let filePath = null;
+
+      // Pattern 1: Relative path with line:col
+      const relativeMatch = error.match(/\.?\/?([^:\s]+\.[jt]sx?):(\d+):(\d+)/i);
+      if (relativeMatch) {
+        filePath = relativeMatch[1].replace(/^\.\//, '');
+      }
+
+      // Pattern 2: File path in quotes
+      if (!filePath) {
+        const quotedMatch = error.match(/["']([^"']+\.[jt]sx?)["']/);
+        if (quotedMatch) {
+          filePath = quotedMatch[1].replace(/^\.\//, '');
+        }
+      }
+
+      // Pattern 3: "in <filename>"
+      if (!filePath) {
+        const inMatch = error.match(/in\s+([^\s]+\.[jt]sx?)/i);
+        if (inMatch) {
+          filePath = inMatch[1].replace(/^\.\//, '');
+        }
+      }
+
+      if (filePath) {
+        // Normalize path
+        filePath = filePath.replace(/\\/g, '/');
+
+        if (!grouped[filePath]) {
+          grouped[filePath] = [];
+        }
+        grouped[filePath].push(error);
+      } else {
+        console.log(`[BuildValidator] Could not extract file from error: ${error.substring(0, 100)}...`);
+      }
+    }
+
+    return grouped;
+  }
+
+  /**
+   * Build an intelligent prompt for AI to fix errors
+   */
+  buildErrorFixPrompt(filePath, currentContent, errors, workspacePath) {
+    // Get file extension to determine language
+    const ext = path.extname(filePath);
+    const language = ext === '.tsx' ? 'typescript' :
+                     ext === '.ts' ? 'typescript' :
+                     ext === '.jsx' ? 'javascript' :
+                     ext === '.js' ? 'javascript' : 'code';
+
+    return `You are an expert code fixing assistant. Your task is to fix build errors in a ${language} file.
+
+**CRITICAL RULES**:
+1. Fix ONLY the errors listed below
+2. Do NOT change working code
+3. Do NOT add new features or refactor
+4. Preserve all existing comments, formatting, and logic
+5. Return ONLY the complete fixed code - no explanations, no markdown formatting
+6. The code must be syntactically valid and ready to use
+
+**File**: ${filePath}
+
+**Current Code**:
+\`\`\`${language}
+${currentContent}
+\`\`\`
+
+**Build Errors to Fix**:
+${errors.map((err, i) => `${i + 1}. ${err}`).join('\n')}
+
+**Common Error Patterns & Solutions**:
+- "has no default export" → Change \`import X from 'Y'\` to \`import { X } from 'Y'\`
+- "has no exported member" → Change \`import { X } from 'Y'\` to \`import X from 'Y'\`
+- "Cannot find name" → Add missing import or define the variable
+- "needs useState/useEffect" + "Client Component" → Add 'use client' directive at top
+- Missing type annotations → Add appropriate TypeScript types
+- Unused variables → Remove them or use them
+
+**Instructions**:
+1. Analyze each error carefully
+2. Apply the minimal fix needed
+3. Ensure all imports are correct
+4. Return the complete fixed file content
+5. Do NOT wrap in markdown code blocks - return raw code only
+
+**Fixed Code**:`;
+  }
+
+  /**
+   * Extract code from AI response
+   * Handles various response formats
+   */
+  extractCodeFromAIResponse(responseText) {
+    if (!responseText) return null;
+
+    // Strategy 1: Look for code blocks
+    const codeBlockMatch = responseText.match(/```(?:typescript|tsx|javascript|jsx|ts|js)?\s*\n([\s\S]+?)```/);
+    if (codeBlockMatch) {
+      return codeBlockMatch[1].trim();
+    }
+
+    // Strategy 2: Check if entire response looks like code
+    // Valid code should have certain characteristics
+    const looksLikeCode =
+      responseText.includes('import') ||
+      responseText.includes('export') ||
+      responseText.includes('function') ||
+      responseText.includes('const ') ||
+      responseText.includes('let ') ||
+      responseText.includes('class ') ||
+      responseText.includes('interface ');
+
+    if (looksLikeCode) {
+      // Remove any leading/trailing text that's clearly not code
+      let code = responseText.trim();
+
+      // Remove common non-code prefixes
+      const prefixes = [
+        'Here is the fixed code:',
+        'Fixed code:',
+        'The fixed code is:',
+        'Here\'s the solution:',
+        'Solution:',
+      ];
+
+      for (const prefix of prefixes) {
+        if (code.toLowerCase().startsWith(prefix.toLowerCase())) {
+          code = code.substring(prefix.length).trim();
+        }
+      }
+
+      return code;
+    }
+
+    // Strategy 3: If response has multiple lines and starts with valid code syntax
+    const lines = responseText.trim().split('\n');
+    if (lines.length > 1) {
+      const firstLine = lines[0].trim();
+      if (firstLine.startsWith('import ') ||
+          firstLine.startsWith('export ') ||
+          firstLine.startsWith("'use ") ||
+          firstLine.startsWith('"use ') ||
+          firstLine.startsWith('//') ||
+          firstLine.startsWith('/*')) {
+        return responseText.trim();
+      }
+    }
+
+    console.log('[BuildValidator] Could not extract code from AI response');
+    return null;
+  }
+
+  /**
+   * Validate that fixed code is reasonable
+   */
+  validateFixedCode(fixedCode, originalCode) {
+    // Basic sanity checks
+
+    // 1. Must not be empty
+    if (!fixedCode || fixedCode.trim().length === 0) {
+      console.log('[BuildValidator] Validation failed: empty code');
+      return false;
+    }
+
+    // 2. Must not be drastically shorter (likely truncated)
+    if (fixedCode.length < originalCode.length * 0.5) {
+      console.log('[BuildValidator] Validation failed: code too short (possible truncation)');
+      return false;
+    }
+
+    // 3. Must not be drastically longer (AI added too much)
+    if (fixedCode.length > originalCode.length * 3) {
+      console.log('[BuildValidator] Validation failed: code too long (AI added too much)');
+      return false;
+    }
+
+    // 4. Should contain similar structure (imports, exports)
+    const originalHasImports = originalCode.includes('import ');
+    const fixedHasImports = fixedCode.includes('import ');
+
+    if (originalHasImports && !fixedHasImports) {
+      console.log('[BuildValidator] Validation failed: missing imports');
+      return false;
+    }
+
+    const originalHasExports = originalCode.includes('export ');
+    const fixedHasExports = fixedCode.includes('export ');
+
+    if (originalHasExports && !fixedHasExports) {
+      console.log('[BuildValidator] Validation failed: missing exports');
+      return false;
+    }
+
+    // 5. Should not have obvious syntax errors
+    const hasMismatchedBraces = this.checkBraceBalance(fixedCode);
+    if (hasMismatchedBraces) {
+      console.log('[BuildValidator] Validation failed: mismatched braces');
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Check if braces/brackets/parens are balanced
+   */
+  checkBraceBalance(code) {
+    const stack = [];
+    const pairs = {
+      '{': '}',
+      '[': ']',
+      '(': ')'
+    };
+
+    // Simple check - doesn't handle strings/comments perfectly, but catches major issues
+    for (let i = 0; i < code.length; i++) {
+      const char = code[i];
+
+      if (char in pairs) {
+        stack.push(pairs[char]);
+      } else if (Object.values(pairs).includes(char)) {
+        if (stack.length === 0 || stack.pop() !== char) {
+          return true; // Mismatch found
+        }
+      }
+    }
+
+    return stack.length !== 0; // Should be empty if balanced
   }
   
   async generateImportFixes(missingImports, workspacePath) {
@@ -739,10 +1109,7 @@ class BuildValidator {
     
     return fixes;
   }
-  
-  // Removed generateAIFixes - AI-based fixes were unreliable
-  // Now using deterministic fixes only (ESLint, file creation, etc.)
-  
+
   async applyFixes(workspacePath, fixes) {
     const { exec } = await import('child_process');
     const execPromise = promisify(exec);
@@ -885,6 +1252,247 @@ ${projectContext.ormType ? `
   return contextSection;
 }
 
+// ============================================================================
+// BOILERPLATE DETECTION & CLI COMMAND SYSTEM
+// ============================================================================
+
+/**
+ * Detect if task is creating a boilerplate/project from scratch
+ */
+async function detectBoilerplateIntent(task_title, existingFiles = [], anthropicClient) {
+  try {
+    console.log('[BoilerplateDetector] Analyzing task intent...');
+
+    const prompt = `Analyze this task and determine if it's creating a project from scratch (boilerplate) or adding a feature to existing code.
+
+Task: "${task_title}"
+
+Context:
+- Existing files: ${existingFiles.length} files
+- Files: ${existingFiles.slice(0, 5).join(', ')}${existingFiles.length > 5 ? '...' : ''}
+
+Return ONLY valid JSON:
+{
+  "isBoilerplate": true/false,
+  "framework": "nextjs" | "vite-react" | "vue" | "astro" | null,
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation"
+}
+
+Rules:
+1. isBoilerplate = TRUE if:
+   - Contains: "create", "initialize", "setup", "scaffold", "boilerplate", "new project", "from scratch", "blank", "starter"
+   - AND mentions framework: "Next.js", "React", "Vite", "Vue", "Astro"
+   - AND NO specific feature mentioned (counter, login, navbar, todo, etc.)
+   - AND few/no existing files
+
+2. isBoilerplate = FALSE if:
+   - Contains: "add", "create [specific feature]", "implement", "build [component]"
+   - OR mentions specific features: "counter", "login", "navbar", "todo", "dashboard", "form", "button"
+   - OR project already has many files (${existingFiles.length} files)
+
+Examples:
+✅ "Create a Next.js boilerplate" → isBoilerplate: true, framework: "nextjs"
+✅ "Next.js app" → isBoilerplate: true (framework-only = setup)
+✅ "Setup React project" → isBoilerplate: true, framework: "vite-react"
+❌ "Add a counter component" → isBoilerplate: false
+❌ "Create a counter app" → isBoilerplate: false (specific feature)
+❌ "Counter with Next.js" → isBoilerplate: false (feature overrides framework)`;
+
+    // Retry logic for API overload errors
+    let response;
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        response = await anthropicClient.messages.create({
+          model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929',
+          max_tokens: 512,
+          temperature: 0.1,
+          messages: [{ role: 'user', content: prompt }]
+        });
+        break; // Success, exit retry loop
+      } catch (apiError) {
+        retries--;
+        // Check if error is overloaded (429 or 529)
+        if ((apiError.status === 429 || apiError.status === 529) && retries > 0) {
+          const waitTime = (4 - retries) * 2000; // 2s, 4s, 6s
+          console.log(`[BoilerplateDetector] API overloaded, retrying in ${waitTime}ms... (${retries} retries left)`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          throw apiError; // Re-throw if not overload error or no retries left
+        }
+      }
+    }
+
+    // Parse JSON response (handle markdown-wrapped JSON)
+    let responseText = response.content[0].text.trim();
+
+    // Strip markdown code fences if present
+    const jsonMatch = responseText.match(/```json\s*([\s\S]*?)```/) ||
+                     responseText.match(/```\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      responseText = jsonMatch[1].trim();
+    }
+
+    const result = JSON.parse(responseText);
+    console.log(`[BoilerplateDetector] Intent: ${result.isBoilerplate ? 'BOILERPLATE' : 'FEATURE'}, Framework: ${result.framework || 'none'}, Confidence: ${result.confidence}`);
+    console.log(`[BoilerplateDetector] Reasoning: ${result.reasoning}`);
+
+    return result;
+  } catch (error) {
+    console.error('[BoilerplateDetector] Error detecting intent:', error);
+    // Default to false (use AI generation) on error
+    return { isBoilerplate: false, framework: null, confidence: 0, reasoning: 'Error during detection' };
+  }
+}
+
+/**
+ * Search web for latest CLI command using Anthropic web search
+ */
+async function searchForLatestCLICommand(framework, anthropicClient) {
+  try {
+    console.log(`[WebSearch] Searching for latest ${framework} CLI command...`);
+
+    const currentYear = new Date().getFullYear();
+
+    // Retry logic for API overload errors
+    let response;
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        response = await anthropicClient.messages.create({
+          model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929',
+          max_tokens: 2048,
+          tools: [{
+            type: mcpConfig.tools.webSearch,
+            name: "web_search"
+          }],
+          messages: [{
+            role: 'user',
+            content: `Find the latest official ${framework} boilerplate creation command for ${currentYear}.
+
+Search the official documentation (e.g., nextjs.org, vitejs.dev, vuejs.org) and extract:
+
+1. The EXACT CLI command with all recommended flags for creating a new project
+2. What's included by default (TypeScript, Tailwind, ESLint, etc.)
+3. Current stable version
+4. Official source URL
+
+Return ONLY valid JSON:
+{
+  "command": "exact CLI command to run (use {PROJECT_NAME} as placeholder for project name)",
+  "includes": ["TypeScript", "Tailwind CSS", "ESLint"],
+  "version": "x.x.x",
+  "source": "https://official-url"
+}
+
+CRITICAL - Commands MUST be non-interactive (no prompts):
+- For Next.js: MUST include --yes flag → npx create-next-app@latest {PROJECT_NAME} --yes
+- For Vite: Use --template flag → npm create vite@latest {PROJECT_NAME} -- --template react-ts
+- For Vue: Use --yes or individual feature flags
+- For Astro: Use --yes flag
+- The command must work in automated/CI environments without user input`
+          }]
+        });
+        break; // Success, exit retry loop
+      } catch (apiError) {
+        retries--;
+        // Check if error is overloaded (429 or 529)
+        if ((apiError.status === 429 || apiError.status === 529) && retries > 0) {
+          const waitTime = (4 - retries) * 2000; // 2s, 4s, 6s
+          console.log(`[WebSearch] API overloaded, retrying in ${waitTime}ms... (${retries} retries left)`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          throw apiError; // Re-throw if not overload error or no retries left
+        }
+      }
+    }
+
+    // Find the text content block (skip tool_use blocks)
+    const textBlock = response.content.find(block => block.type === 'text');
+    if (!textBlock || !textBlock.text) {
+      throw new Error('No text response from web search');
+    }
+
+    let resultText = textBlock.text.trim();
+
+    // Strip markdown code fences if present
+    const jsonMatch = resultText.match(/```json\s*([\s\S]*?)```/) ||
+                     resultText.match(/```\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      resultText = jsonMatch[1].trim();
+    }
+
+    const result = JSON.parse(resultText);
+
+    console.log(`[WebSearch] ✅ Found command: ${result.command}`);
+    console.log(`[WebSearch] Version: ${result.version}, Source: ${result.source}`);
+
+    return result;
+  } catch (error) {
+    console.error('[WebSearch] Error searching for CLI command:', error);
+    throw error;
+  }
+}
+
+/**
+ * Execute CLI command to create boilerplate
+ */
+async function executeCLICommand(command, workspacePath, projectName) {
+  return new Promise((resolve, reject) => {
+    console.log(`[CLI] Executing: ${command}`);
+
+    // Replace placeholder with '.' to create in current directory (avoid nested folders)
+    // Using '.' ensures files are created directly in workspace_path, not in a subfolder
+    let finalCommand = command.replace(/{PROJECT_NAME}/g, '.');
+
+    // Ensure non-interactive execution by adding appropriate flags
+    // For Next.js: add --yes if not present
+    if (finalCommand.includes('create-next-app') && !finalCommand.includes('--yes')) {
+      finalCommand = finalCommand.replace('create-next-app@latest', 'create-next-app@latest --yes');
+      console.log(`[CLI] Added --yes flag for non-interactive execution`);
+    }
+
+    console.log(`[CLI] Final command: ${finalCommand}`);
+
+    const child = spawn(finalCommand, {
+      cwd: workspacePath,
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe']  // Close stdin to prevent interactive prompts
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => {
+      const output = data.toString();
+      stdout += output;
+      console.log(`[CLI] ${output}`);
+    });
+
+    child.stderr.on('data', (data) => {
+      const output = data.toString();
+      stderr += output;
+      console.error(`[CLI] ${output}`);
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        console.log(`[CLI] ✅ Command completed successfully`);
+        resolve({ success: true, stdout, stderr });
+      } else {
+        console.error(`[CLI] ❌ Command failed with code ${code}`);
+        reject(new Error(`CLI command failed with code ${code}: ${stderr}`));
+      }
+    });
+
+    child.on('error', (error) => {
+      console.error('[CLI] Error executing command:', error);
+      reject(error);
+    });
+  });
+}
+
 export const contextEnhancedGenerator = [
   {
     name: 'generate_code_with_context',
@@ -935,7 +1543,108 @@ export const contextEnhancedGenerator = [
       // Scan existing files
       const projectFiles = await scanProjectFiles(workspace_path);
       console.log(`Found ${projectFiles.length} existing files`);
-      
+
+      // ====================================================================
+      // STEP 1: DETECT IF THIS IS A BOILERPLATE OR FEATURE TASK
+      // ====================================================================
+      const intent = await detectBoilerplateIntent(task_title, projectFiles, anthropic);
+
+      if (intent.isBoilerplate && intent.framework) {
+        console.log(`\n${'='.repeat(70)}`);
+        console.log('🚀 BOILERPLATE DETECTED - Using CLI Command Approach');
+        console.log(`${'='.repeat(70)}`);
+        console.log(`Framework: ${intent.framework}`);
+        console.log(`Confidence: ${(intent.confidence * 100).toFixed(0)}%`);
+        console.log(`Reasoning: ${intent.reasoning}`);
+        console.log(`${'='.repeat(70)}\n`);
+
+        // Always fetch latest CLI command from web
+        console.log('[Boilerplate] Fetching latest CLI command from web...');
+        let cliCommand = null;
+        try {
+          cliCommand = await searchForLatestCLICommand(intent.framework, anthropic);
+          console.log(`[Boilerplate] ✅ Found latest command`);
+          console.log(`[Boilerplate] Command: ${cliCommand.command}`);
+          console.log(`[Boilerplate] Includes: ${cliCommand.includes.join(', ')}`);
+          console.log(`[Boilerplate] Version: ${cliCommand.version}`);
+        } catch (error) {
+          console.error('[Boilerplate] Web search failed, falling back to AI generation:', error.message);
+          // Fall through to AI generation below
+          cliCommand = null;
+        }
+
+        // Execute CLI command if we have it
+        if (cliCommand) {
+          try {
+            // Check if workspace only has starter files created by Kanbanix
+            const starterFiles = ['.gitignore', 'LICENSE', 'README.md'];
+            const onlyHasStarterFiles = projectFiles.length > 0 &&
+              projectFiles.every(f => starterFiles.includes(f));
+
+            if (onlyHasStarterFiles) {
+              console.log('[Boilerplate] Detected starter files from Kanbanix, removing them temporarily...');
+              // Remove starter files so CLI can create its own versions
+              for (const file of projectFiles) {
+                try {
+                  await fs.unlink(path.join(workspace_path, file));
+                  console.log(`[Boilerplate] Removed: ${file}`);
+                } catch (error) {
+                  console.error(`[Boilerplate] Failed to remove ${file}:`, error.message);
+                }
+              }
+            }
+
+            // Generate project name from workspace path
+            const projectName = path.basename(workspace_path);
+
+            console.log(`[Boilerplate] Creating ${intent.framework} project: ${projectName}`);
+            const result = await executeCLICommand(cliCommand.command, workspace_path, projectName);
+
+            // Get list of created files
+            const createdFiles = await scanProjectFiles(workspace_path);
+            const newFiles = createdFiles.filter(f => !projectFiles.includes(f));
+
+            console.log(`\n${'='.repeat(70)}`);
+            console.log('✅ BOILERPLATE CREATED SUCCESSFULLY');
+            console.log(`${'='.repeat(70)}`);
+            console.log(`Framework: ${intent.framework}`);
+            console.log(`Files created: ${newFiles.length}`);
+            console.log(`Version: ${cliCommand.version}`);
+            console.log(`Includes: ${cliCommand.includes.join(', ')}`);
+            console.log(`${'='.repeat(70)}\n`);
+
+            // Return success response
+            return {
+              success: true,
+              framework: intent.framework,
+              operation_type: 'boilerplate_cli',
+              files: newFiles.reduce((acc, file) => {
+                acc[file] = `[Created by ${cliCommand.command}]`;
+                return acc;
+              }, {}),
+              summary: `Created ${intent.framework} boilerplate with ${cliCommand.includes.join(', ')}`,
+              version: cliCommand.version,
+              source: cliCommand.source,
+              dependencies: []
+            };
+          } catch (error) {
+            console.error('[Boilerplate] CLI execution failed:', error.message);
+            console.log('[Boilerplate] Falling back to AI generation...');
+            // Fall through to AI generation below
+          }
+        }
+      } else {
+        console.log(`\n${'='.repeat(70)}`);
+        console.log('🎨 FEATURE TASK DETECTED - Using AI Code Generation');
+        console.log(`${'='.repeat(70)}`);
+        console.log(`Reasoning: ${intent.reasoning}`);
+        console.log(`${'='.repeat(70)}\n`);
+      }
+
+      // ====================================================================
+      // STEP 2: AI CODE GENERATION (for features or fallback)
+      // ====================================================================
+
       // Load package.json if exists
       let packageJson = null;
       try {
@@ -956,15 +1665,16 @@ export const contextEnhancedGenerator = [
       const affectedFiles = await detectAffectedFiles(task_title, projectFiles, projectContext);
       console.log(`Detected ${affectedFiles.length} potentially affected files`);
       
-      // Load content of affected files
+      // Load content of affected files (FULL CONTENT - NO TRUNCATION)
       const affectedFilesContent = {};
       for (const file of affectedFiles.slice(0, 5)) {
         try {
           const content = await fs.readFile(path.join(workspace_path, file), 'utf-8');
           affectedFilesContent[file] = {
             exists: true,
-            content: content.slice(0, 2000), // Limit content for context
-            lines: content.split('\n').length
+            content: content, // FIXED: Send FULL content so AI can preserve existing code
+            lines: content.split('\n').length,
+            size: content.length
           };
         } catch (e) {
           // File doesn't exist yet
@@ -1014,22 +1724,57 @@ ${typeContext}
 - Package.json dependencies: ${packageJson ? Object.keys(packageJson.dependencies || {}).slice(0, 15).join(', ') : 'No package.json'}
 
 ${Object.keys(affectedFilesContent).length > 0 ? `
-## Existing Files to Modify:
+## Existing Files to Modify (COMPLETE CONTENT):
 ${Object.entries(affectedFilesContent).map(([filePath, fileData]) => `
-File: ${filePath} (${fileData.lines} lines)
-Preview: ${fileData.content.slice(0, 500)}...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📄 File: ${filePath} (${fileData.lines} lines, ${fileData.size} characters)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${fileData.content}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 `).join('\n')}
 
-IMPORTANT: These files exist - MODIFY them, don't create duplicates
+⚠️  CRITICAL: These files exist with the COMPLETE content shown above.
+You MUST MODIFY them, NOT create duplicates or overwrite!
 ` : ''}
 
 ## Code Generation Requirements:
 1. ${projectContext?.backendType ? 'USE EXISTING BACKEND - Do not create new backend infrastructure' : 'Create backend if needed for this task'}
 2. ${projectContext?.projectType ? `Follow ${projectContext.projectType} patterns and conventions` : 'Detect and follow project patterns'}
 3. ${projectContext?.ormType ? `Use existing ${projectContext.ormType} for database operations` : 'Set up database if needed'}
-4. Preserve ALL existing functionality - NEVER overwrite existing code
-5. Build incrementally on previous work
-6. When modifying existing files, provide modification instructions
+4. **CRITICAL**: When creating new projects or adding dependencies, ALWAYS use the LATEST STABLE versions (e.g., Next.js 15+, React 19+, not outdated versions like 14.x or 18.x)
+
+## ⚠️  CRITICAL PRESERVATION RULES (READ CAREFULLY):
+${Object.keys(affectedFilesContent).length > 0 ? `
+**YOU HAVE BEEN GIVEN COMPLETE EXISTING FILES ABOVE. YOUR JOB IS TO ADD/MODIFY, NOT REGENERATE!**
+
+1. **READ THE COMPLETE CONTENT**: The files shown above contain the FULL, COMPLETE, UNTRUNCATED code
+2. **IDENTIFY EXISTING FEATURES**: Carefully note ALL existing:
+   - Functions, components, variables
+   - Styles, colors, CSS classes
+   - Event handlers, state management
+   - Props, types, interfaces
+   - Comments and formatting
+3. **PRESERVE EVERYTHING**: Your task is to ADD the requested feature to the existing code
+   - DO NOT remove or modify existing features unless explicitly asked
+   - DO NOT change existing styles, colors, or CSS classes
+   - DO NOT rewrite or refactor code that's working
+   - DO NOT change variable names or restructure the code
+   - DO NOT remove comments or alter formatting
+4. **INCREMENTAL CHANGES ONLY**:
+   - Add ONLY what the task requests
+   - Keep all existing code exactly as it is
+   - Return the COMPLETE modified file with both old and new code
+5. **EXAMPLE**: If file has red and green buttons, and task says "add reset button":
+   - ✅ CORRECT: Add reset button, KEEP red and green buttons with their colors
+   - ❌ WRONG: Add reset button and change all buttons to black/default
+` : `
+**NEW FILE CREATION MODE**: No existing files detected, you can create from scratch.
+`}
+
+6. Build incrementally on previous work
+7. When modifying existing files, return the COMPLETE file with ALL original code plus your additions
 
 Output Format:
 Return a valid JSON object with:

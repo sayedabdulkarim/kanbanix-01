@@ -101,6 +101,11 @@ export async function POST(request: NextRequest) {
     if (aiResponse.changes && aiResponse.changes.length > 0) {
       hasChanges = true;
       
+      // Track the new diffs - fix the path extraction
+      const changedFilePaths = aiResponse.changes.map((change: { path?: string; filePath?: string }) =>
+        change.path ? change.path.replace(/^\//, '') : change.filePath || ''
+      ).filter((path: string) => path);
+
       // Create a new agent execution record for these changes
       const execution = await prisma.agentExecution.create({
         data: {
@@ -115,6 +120,7 @@ export async function POST(request: NextRequest) {
           }),
           summary: aiResponse.response,
           changes: JSON.stringify(aiResponse.changes),
+          filesChanged: JSON.stringify(changedFilePaths), // ✅ Add this field!
           progress: 100,
           currentStep: 'Changes applied',
           attempts: 1,
@@ -122,11 +128,6 @@ export async function POST(request: NextRequest) {
           completedAt: new Date()
         }
       });
-
-      // Track the new diffs - fix the path extraction
-      const changedFilePaths = aiResponse.changes.map((change: { path?: string; filePath?: string }) => 
-        change.path ? change.path.replace(/^\//, '') : change.filePath || ''
-      ).filter((path: string) => path);
       
       if (changedFilePaths.length > 0) {
         newDiffs = await diffTrackingService.captureDiff(

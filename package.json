@@ -3,8 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "npm run dev:all",
+    "dev": "node scripts/kill-dev-servers.js && npm run dev:all",
     "dev:all": "concurrently -n \"CLIENT,MCP\" -c \"blue,green\" \"cd client && node server.js\" \"cd mcp-server && npm start\"",
+    "dev:force": "killall -9 node 2>/dev/null || true && npm run dev:all",
     "dev:client": "cd client && npm run dev",
     "dev:mcp": "cd mcp-server && npm start",
     "install:all": "npm install && cd client && npm install && cd ../mcp-server && npm install",
