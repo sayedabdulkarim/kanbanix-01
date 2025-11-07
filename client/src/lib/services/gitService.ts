@@ -419,8 +419,8 @@ class GitService {
         'git status --porcelain',
         { cwd: workspacePath }
       );
-      
-      return stdout
+
+      const paths = stdout
         .trim()
         .split('\n')
         .filter(line => line)
@@ -428,6 +428,34 @@ class GitService {
           const [status, ...pathParts] = line.trim().split(' ');
           return pathParts.join(' ');
         });
+
+      // Expand directories into individual files
+      const expandedPaths: string[] = [];
+      for (const pathItem of paths) {
+        if (pathItem.endsWith('/')) {
+          // This is a directory - get all files within it
+          try {
+            const { stdout: filesOutput } = await execAsync(
+              `find "${pathItem}" -type f`,
+              { cwd: workspacePath }
+            );
+            const files = filesOutput
+              .trim()
+              .split('\n')
+              .filter(f => f && !f.includes('node_modules') && !f.startsWith('.git/'));
+            expandedPaths.push(...files);
+            console.log(`[gitService] Expanded directory ${pathItem} into ${files.length} files`);
+          } catch (error) {
+            console.error(`[gitService] Error expanding directory ${pathItem}:`, error);
+            // If expansion fails, keep the directory path
+            expandedPaths.push(pathItem);
+          }
+        } else {
+          expandedPaths.push(pathItem);
+        }
+      }
+
+      return expandedPaths;
     } catch (error) {
       console.error('Error getting uncommitted changes:', error);
       return [];
