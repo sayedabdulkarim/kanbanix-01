@@ -40,7 +40,7 @@ async function applyFileModifications(existingContent, newContent, modifications
     // Add imports at the top of the file
     const imports = modifications.imports || [];
     const importStatements = imports.join('\n');
-    
+
     // Check if imports already exist
     const missingImports = imports.filter(imp => !existingContent.includes(imp));
     if (missingImports.length > 0) {
@@ -48,11 +48,57 @@ async function applyFileModifications(existingContent, newContent, modifications
       const importMatch = existingContent.match(/^(import .+\n)+/m);
       if (importMatch) {
         const lastImportIndex = importMatch.index + importMatch[0].length;
-        result = existingContent.slice(0, lastImportIndex) + 
-                missingImports.join('\n') + '\n' + 
+        result = existingContent.slice(0, lastImportIndex) +
+                missingImports.join('\n') + '\n' +
                 existingContent.slice(lastImportIndex);
       } else {
         result = missingImports.join('\n') + '\n\n' + existingContent;
+      }
+    }
+
+    // Check if there's also a jsx_element modification to apply
+    if (modifications.jsx_element) {
+      const jsxMod = modifications.jsx_element;
+      const { element, location } = jsxMod;
+
+      if (!element) {
+        console.error('[Context-Enhanced] jsx_element requires "element" property');
+      } else {
+        // Apply JSX modification to the result
+        if (location === 'before_closing_div' || location === 'end' || !location) {
+          const returnMatch = result.match(/return\s*\(/);
+          if (returnMatch) {
+            const returnStart = returnMatch.index + returnMatch[0].length;
+            const returnContent = result.slice(returnStart);
+            const closingTags = [...returnContent.matchAll(/<\/(div|main|section|article)>/g)];
+
+            if (closingTags.length > 0) {
+              const targetTag = closingTags[closingTags.length - 2] || closingTags[closingTags.length - 1];
+              const insertPos = returnStart + targetTag.index;
+              const lines = result.slice(0, insertPos).split('\n');
+              const lastLine = lines[lines.length - 1];
+              const indent = lastLine.match(/^(\s*)/)?.[1] || '        ';
+
+              result = result.slice(0, insertPos) +
+                      `${indent}<${element} />\n${indent}` +
+                      result.slice(insertPos);
+              console.log(`[Context-Enhanced] Added JSX element <${element} /> to component`);
+            }
+          }
+        } else if (location === 'after_element') {
+          const after = jsxMod.after;
+          if (after && result.includes(after)) {
+            const afterIndex = result.indexOf(after) + after.length;
+            const lines = result.slice(0, afterIndex).split('\n');
+            const lastLine = lines[lines.length - 1];
+            const indent = lastLine.match(/^(\s*)/)?.[1] || '        ';
+
+            result = result.slice(0, afterIndex) +
+                    `\n${indent}<${element} />` +
+                    result.slice(afterIndex);
+            console.log(`[Context-Enhanced] Added JSX element <${element} /> after ${after}`);
+          }
+        }
       }
     }
   } else if (modifications.type === 'add_functions') {
@@ -71,16 +117,97 @@ async function applyFileModifications(existingContent, newContent, modifications
         }
       }
     }
+  } else if (modifications.type === 'add_jsx_element') {
+    // Add JSX element to a React component's JSX body
+    const { element, location } = modifications;
+
+    if (!element) {
+      console.error('[Context-Enhanced] add_jsx_element requires "element" property');
+      return existingContent;
+    }
+
+    // Strategy: Find the return statement's JSX and insert the element
+    // Look for common insertion points based on location hint
+
+    if (location === 'before_closing_div' || location === 'end') {
+      // Find the last </div> or </main> before the final return closing
+      // This pattern works for most Next.js page components
+      const returnMatch = existingContent.match(/return\s*\(/);
+      if (returnMatch) {
+        const returnStart = returnMatch.index + returnMatch[0].length;
+        const returnContent = existingContent.slice(returnStart);
+
+        // Find the last significant closing tag before the final );\n}
+        const closingTags = [...returnContent.matchAll(/<\/(div|main|section|article)>/g)];
+
+        if (closingTags.length > 0) {
+          // Get the second-to-last closing div (to insert before the outer container closes)
+          const targetTag = closingTags[closingTags.length - 2] || closingTags[closingTags.length - 1];
+          const insertPos = returnStart + targetTag.index;
+
+          // Get the indentation of the closing tag
+          const lines = existingContent.slice(0, insertPos).split('\n');
+          const lastLine = lines[lines.length - 1];
+          const indent = lastLine.match(/^(\s*)/)?.[1] || '        ';
+
+          result = existingContent.slice(0, insertPos) +
+                  `${indent}<${element} />\n${indent}` +
+                  existingContent.slice(insertPos);
+        } else {
+          console.error('[Context-Enhanced] Could not find closing tag for JSX insertion');
+          return existingContent;
+        }
+      } else {
+        console.error('[Context-Enhanced] Could not find return statement');
+        return existingContent;
+      }
+    } else if (location === 'after_element') {
+      // Insert after a specific element (provided in modifications.after)
+      const after = modifications.after;
+      if (after && existingContent.includes(after)) {
+        const afterIndex = existingContent.indexOf(after) + after.length;
+        // Get indentation
+        const lines = existingContent.slice(0, afterIndex).split('\n');
+        const lastLine = lines[lines.length - 1];
+        const indent = lastLine.match(/^(\s*)/)?.[1] || '        ';
+
+        result = existingContent.slice(0, afterIndex) +
+                `\n${indent}<${element} />` +
+                existingContent.slice(afterIndex);
+      } else {
+        console.error('[Context-Enhanced] Could not find after element:', after);
+        return existingContent;
+      }
+    } else {
+      // Default: try to add before the last closing div in the return statement
+      const returnMatch = existingContent.match(/return\s*\(/);
+      if (returnMatch) {
+        const returnStart = returnMatch.index + returnMatch[0].length;
+        const returnEnd = existingContent.indexOf(';\n}', returnStart);
+        const returnContent = existingContent.slice(returnStart, returnEnd);
+
+        // Find last </div> or </main>
+        const lastClosing = returnContent.lastIndexOf('</div>');
+        if (lastClosing !== -1) {
+          const insertPos = returnStart + lastClosing;
+          const indent = '          '; // Common Next.js indentation
+
+          result = existingContent.slice(0, insertPos) +
+                  `${indent}<${element} />\n${indent}` +
+                  existingContent.slice(insertPos);
+        }
+      }
+    }
   } else if (modifications.type === 'add_to_section') {
     // Add content to a specific section (like routes, middleware, etc.)
     const { section, content, marker } = modifications;
-    
+
     if (marker && existingContent.includes(marker)) {
       // Insert after the marker
       const markerIndex = existingContent.indexOf(marker);
       const insertIndex = markerIndex + marker.length;
-      result = existingContent.slice(0, insertIndex) + 
-              '\n' + content + 
+      result = existingContent.slice(0, insertIndex) +
+              '\n' + content +
               existingContent.slice(insertIndex);
     } else if (section) {
       // Try to find the section by pattern
@@ -88,8 +215,8 @@ async function applyFileModifications(existingContent, newContent, modifications
       const sectionMatch = existingContent.match(sectionPattern);
       if (sectionMatch) {
         const insertIndex = sectionMatch.index + sectionMatch[0].length;
-        result = existingContent.slice(0, insertIndex) + 
-                '\n  ' + content + 
+        result = existingContent.slice(0, insertIndex) +
+                '\n  ' + content +
                 existingContent.slice(insertIndex);
       } else {
         // Append to end if section not found
@@ -1775,6 +1902,35 @@ ${Object.keys(affectedFilesContent).length > 0 ? `
 
 6. Build incrementally on previous work
 7. When modifying existing files, return the COMPLETE file with ALL original code plus your additions
+8. **COMPONENT INTEGRATION REQUIREMENT** (CRITICAL - DO NOT SKIP):
+   - When creating a NEW component (Counter, TodoList, Button, etc.), you MUST also modify an existing entry point file to IMPORT and USE it
+   - Entry point files are provided in "Existing Files to Modify" section above
+   - Simply creating a component file is NOT enough - it must be integrated into the app
+   - YOU MUST USE THE MODIFICATIONS OBJECT to add both import AND JSX element to the entry point file
+   - DO NOT put the modified entry point file in the "files" object - use "modifications" object instead
+
+   **CORRECT Example for Counter component integration:**
+   {
+     "modifications": {
+       "app/page.tsx": {
+         "type": "add_imports",
+         "imports": ["import Counter from '@/components/Counter';"],
+         "jsx_element": {
+           "element": "Counter",
+           "location": "before_closing_div"
+         }
+       }
+     },
+     "files": {
+       "components/Counter.tsx": "... Counter component code ...",
+       "components/Counter.module.css": "... Counter styles ..."
+     }
+   }
+
+   **jsx_element options:**
+   - element: Component name (e.g., "Counter", "TodoList")
+   - location: "before_closing_div" (default, safest), "after_element", or "end"
+   - after: Optional, used with "after_element" to specify what element to insert after
 
 Output Format:
 Return a valid JSON object with:
@@ -1783,8 +1939,13 @@ Return a valid JSON object with:
   "operation_type": "modify" or "create" or "replace",
   "modifications": {
     "path/to/file.js": {
-      "type": "add_imports" | "add_functions" | "add_to_section" | "merge_objects",
+      "type": "add_imports" | "add_functions" | "add_to_section" | "add_jsx_element" | "merge_objects",
       "imports": ["array of import statements to add"],
+      "jsx_element": {
+        "element": "ComponentName",
+        "location": "before_closing_div" | "after_element" | "end",
+        "after": "optional: HTML string to insert after"
+      },
       "functions": [{"name": "functionName", "content": "function code"}],
       "section": "section name to add to",
       "content": "content to add",
@@ -2068,7 +2229,47 @@ Return ONLY valid JSON, no markdown or explanations.`;
           }
         }
       }
-      
+
+      // Process modification-only files (files in modifications but not in files object)
+      if (generatedCode.modifications && workspace_path) {
+        const filesInFilesObject = new Set(Object.keys(generatedCode.files || {}));
+        const modificationOnlyFiles = Object.keys(generatedCode.modifications).filter(
+          filePath => !filesInFilesObject.has(filePath)
+        );
+
+        if (modificationOnlyFiles.length > 0) {
+          console.log(`[Context-Enhanced] Processing ${modificationOnlyFiles.length} modification-only files...`);
+
+          for (const filePath of modificationOnlyFiles) {
+            const fullPath = path.join(workspace_path, filePath);
+
+            try {
+              // Read existing file
+              const existingContent = await fs.readFile(fullPath, 'utf-8');
+              console.log(`[Context-Enhanced] Applying modifications to existing file: ${filePath}`);
+
+              // Apply modifications (note: passing empty string as newContent since we only have modifications)
+              const modifiedContent = await applyFileModifications(
+                existingContent,
+                '', // No new content, only modifications
+                generatedCode.modifications[filePath]
+              );
+
+              // Write modified file back
+              await fs.writeFile(fullPath, modifiedContent, 'utf-8');
+              console.log(`[Context-Enhanced] ✅ Modified file: ${filePath}`);
+
+              changes.push({
+                path: filePath,
+                type: 'modified'
+              });
+            } catch (error) {
+              console.error(`[Context-Enhanced] ❌ Failed to apply modifications to ${filePath}:`, error.message);
+            }
+          }
+        }
+      }
+
       // Install dependencies if needed
       if (generatedCode.dependencies && generatedCode.dependencies.length > 0 && workspace_path) {
         console.log(`[Context-Enhanced] Installing dependencies: ${generatedCode.dependencies.join(', ')}`);
@@ -2092,11 +2293,16 @@ Return ONLY valid JSON, no markdown or explanations.`;
       
       // Update project context with this task
       if (project_id && generatedCode) {
+        const allFiles = new Set([
+          ...Object.keys(generatedCode.files || {}),
+          ...Object.keys(generatedCode.modifications || {})
+        ]);
+
         await updateProjectContextAfterTask(project_id, {
           taskId: `task_${Date.now()}`,
           title: task_title,
-          filesCreated: Object.keys(generatedCode.files || {}).filter(f => !affectedFiles.includes(f)),
-          filesModified: Object.keys(generatedCode.files || {}).filter(f => affectedFiles.includes(f)),
+          filesCreated: Array.from(allFiles).filter(f => !affectedFiles.includes(f)),
+          filesModified: Array.from(allFiles).filter(f => affectedFiles.includes(f)),
           summary: generatedCode.summary
         });
       }
@@ -2190,18 +2396,23 @@ async function scanProjectFiles(workspacePath) {
 async function detectAffectedFiles(taskTitle, projectFiles, context) {
   const affected = [];
   const taskLower = taskTitle.toLowerCase();
-  
+
   // Use context to better detect affected files
   if (context?.backendType && (taskLower.includes('todo') || taskLower.includes('api'))) {
     // For backend tasks, prioritize backend files
     const backendFiles = context.backendFiles ? JSON.parse(context.backendFiles) : [];
     affected.push(...backendFiles);
   }
-  
+
+  // Detect task intent for integration
+  const isComponentCreation = taskLower.match(/\b(create|add|build)\b.*\b(component|button|form|card|modal|navbar|sidebar|header|footer|counter|todo|list)\b/);
+  const isFeatureAddition = taskLower.match(/\b(add|create|implement)\b/);
+
   // Pattern matching for common file types
   for (const file of projectFiles) {
     const fileLower = file.toLowerCase();
-    
+
+    // Existing pattern matching - find files that already contain the keyword
     if (taskLower.includes('todo') && fileLower.includes('todo')) {
       affected.push(file);
     } else if (taskLower.includes('counter') && fileLower.includes('counter')) {
@@ -2210,7 +2421,50 @@ async function detectAffectedFiles(taskTitle, projectFiles, context) {
       affected.push(file);
     }
   }
-  
+
+  // NEW: Detect integration points for component creation
+  // If creating a new component/feature but no existing files found, identify where it should be integrated
+  if ((isComponentCreation || isFeatureAddition) && affected.length === 0) {
+    console.log('[AffectedFiles] Component/feature creation detected - finding integration points');
+
+    // Priority 1: Find main entry point files (page.tsx, index.tsx, App.tsx, Home.tsx, main page)
+    const entryPoints = projectFiles.filter(f => {
+      const name = f.split('/').pop().toLowerCase();
+      return (
+        // Next.js App Router
+        f === 'app/page.tsx' || f === 'src/app/page.tsx' ||
+        // Next.js Pages Router
+        f === 'pages/index.tsx' || f === 'src/pages/index.tsx' ||
+        // React/Vite
+        f === 'src/App.tsx' || f === 'src/App.jsx' ||
+        f === 'src/pages/Home.tsx' || f === 'src/pages/Home.jsx' ||
+        // General patterns
+        name === 'page.tsx' || name === 'page.jsx' ||
+        name === 'index.tsx' || name === 'index.jsx' ||
+        name === 'app.tsx' || name === 'app.jsx' ||
+        name === 'home.tsx' || name === 'home.jsx' ||
+        name === 'main.tsx' || name === 'main.jsx'
+      );
+    });
+
+    if (entryPoints.length > 0) {
+      console.log(`[AffectedFiles] Found ${entryPoints.length} entry point(s) to integrate component:`, entryPoints);
+      affected.push(...entryPoints.slice(0, 2)); // Take top 2 entry points
+    }
+
+    // Priority 2: If no entry points found, look for layout files
+    if (affected.length === 0) {
+      const layouts = projectFiles.filter(f =>
+        f.includes('layout.tsx') || f.includes('Layout.tsx') ||
+        f.includes('layout.jsx') || f.includes('Layout.jsx')
+      );
+      if (layouts.length > 0) {
+        console.log(`[AffectedFiles] Found layout file to integrate component:`, layouts[0]);
+        affected.push(layouts[0]);
+      }
+    }
+  }
+
   return [...new Set(affected)];
 }
 
