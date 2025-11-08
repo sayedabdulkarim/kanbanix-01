@@ -274,20 +274,114 @@ export class TypeSystemAnalyzer {
         patterns.pathAliasPrefix = '@/';
       }
       
-      // Check for CSS approach
-      const hasTailwind = await fs.access(path.join(projectPath, 'tailwind.config.js'))
-        .then(() => true).catch(() => false);
-      const hasStyledComponents = stdout.includes('styled-components');
-      
-      patterns.styling = hasTailwind ? 'tailwind' : 
-                        hasStyledComponents ? 'styled-components' : 
-                        'css-modules';
+      // Check for CSS approach - comprehensive detection
+      patterns.styling = await this.detectCSSFramework(projectPath, stdout);
       
     } catch (error) {
       console.log('[TypeAnalyzer] Error detecting patterns:', error.message);
     }
     
     return patterns;
+  }
+
+  /**
+   * Detect CSS framework/approach used in the project
+   * Supports: Tailwind v3, Tailwind v4, Styled-Components, CSS Modules
+   */
+  async detectCSSFramework(projectPath, stdout) {
+    try {
+      console.log('[TypeAnalyzer] Detecting CSS framework...');
+
+      // 1. Check for Tailwind CSS v4 (postcss.config with @tailwindcss/postcss)
+      try {
+        const postcssConfigPaths = [
+          path.join(projectPath, 'postcss.config.mjs'),
+          path.join(projectPath, 'postcss.config.js'),
+          path.join(projectPath, 'postcss.config.cjs')
+        ];
+
+        for (const configPath of postcssConfigPaths) {
+          try {
+            const postcssContent = await fs.readFile(configPath, 'utf-8');
+            if (postcssContent.includes('@tailwindcss/postcss')) {
+              console.log('[TypeAnalyzer] Detected Tailwind CSS v4 via PostCSS config');
+              return 'tailwind';
+            }
+          } catch {
+            // File doesn't exist, try next
+            continue;
+          }
+        }
+      } catch (error) {
+        // PostCSS config not found, continue checking
+      }
+
+      // 2. Check package.json for Tailwind CSS (v3 or v4)
+      try {
+        const packagePath = path.join(projectPath, 'package.json');
+        const packageJson = JSON.parse(await fs.readFile(packagePath, 'utf-8'));
+        const allDeps = {
+          ...packageJson.dependencies,
+          ...packageJson.devDependencies
+        };
+
+        // Check for Tailwind v4 (@tailwindcss/postcss) or v3 (tailwindcss)
+        if (allDeps['@tailwindcss/postcss'] || allDeps['tailwindcss']) {
+          console.log('[TypeAnalyzer] Detected Tailwind CSS via package.json');
+          return 'tailwind';
+        }
+
+        // Check for styled-components
+        if (allDeps['styled-components']) {
+          console.log('[TypeAnalyzer] Detected Styled-Components via package.json');
+          return 'styled-components';
+        }
+
+        // Check for emotion
+        if (allDeps['@emotion/react'] || allDeps['@emotion/styled']) {
+          console.log('[TypeAnalyzer] Detected Emotion CSS-in-JS');
+          return 'emotion';
+        }
+      } catch (error) {
+        console.log('[TypeAnalyzer] Could not read package.json:', error.message);
+      }
+
+      // 3. Check for Tailwind v3 config files
+      const tailwindConfigPaths = [
+        path.join(projectPath, 'tailwind.config.js'),
+        path.join(projectPath, 'tailwind.config.ts'),
+        path.join(projectPath, 'tailwind.config.mjs'),
+        path.join(projectPath, 'tailwind.config.cjs')
+      ];
+
+      for (const configPath of tailwindConfigPaths) {
+        const exists = await fs.access(configPath).then(() => true).catch(() => false);
+        if (exists) {
+          console.log('[TypeAnalyzer] Detected Tailwind CSS v3 via config file');
+          return 'tailwind';
+        }
+      }
+
+      // 4. Check source code for styled-components usage
+      if (stdout.includes('styled-components') || stdout.includes('styled.')) {
+        console.log('[TypeAnalyzer] Detected Styled-Components in source code');
+        return 'styled-components';
+      }
+
+      // 5. Check for CSS Modules pattern in source
+      if (stdout.includes('.module.css') || stdout.includes('.module.scss')) {
+        console.log('[TypeAnalyzer] Detected CSS Modules pattern in source');
+        return 'css-modules';
+      }
+
+      // 6. Default fallback
+      console.log('[TypeAnalyzer] No specific CSS framework detected, defaulting to CSS Modules');
+      return 'css-modules';
+
+    } catch (error) {
+      console.log('[TypeAnalyzer] Error detecting CSS framework:', error.message);
+      return 'css-modules'; // Safe fallback
+    }
   }
 
   /**

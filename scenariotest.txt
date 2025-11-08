@@ -5,11 +5,9 @@ KANBANIX AI ERROR FIXING - TEST SCENARIOS
 PROJECT 1: Counter App - (please add  Counter App to our main page)
 ----------------------
 1. Create a Next.js boilerplate
-2. Create a Counter component with increment and decrement buttons
-   - Remove all Next.js boilerplate content except the Counter component
+2. Create a Counter component with increment and decrement buttons and Remove all Next.js boilerplate content except the Counter component
 3. Add a reset button to Counter
-4. Create a Header component with app title
-5. Add Header to the home page
+4. Create a Header with app logo on left and profile icon on right. Header should be at top, Counter centered in remaining space
 
 PROJECT 2: Todo App
 -------------------
