@@ -32,6 +32,34 @@ function getMainAppPort(): number {
   return 3000;
 }
 
+// Helper function to clear cache directories
+async function clearCacheDirectories(workspacePath: string) {
+  const nextBuildDir = path.join(workspacePath, '.next');
+  const distDir = path.join(workspacePath, 'dist');
+  const buildDir = path.join(workspacePath, 'build');
+
+  try {
+    await fs.rm(nextBuildDir, { recursive: true, force: true });
+    console.log('✅ Cleared .next cache directory');
+  } catch (err) {
+    // Directory doesn't exist, which is fine
+  }
+
+  try {
+    await fs.rm(distDir, { recursive: true, force: true });
+    console.log('✅ Cleared dist cache directory');
+  } catch (err) {
+    // Directory doesn't exist, which is fine
+  }
+
+  try {
+    await fs.rm(buildDir, { recursive: true, force: true });
+    console.log('✅ Cleared build cache directory');
+  } catch (err) {
+    // Directory doesn't exist, which is fine
+  }
+}
+
 // Find an available port, with safety limits
 async function findAvailablePort(startPort: number = 4000): Promise<number> {
   const maxPort = 9999; // Maximum port to try
@@ -257,15 +285,20 @@ export async function POST(request: NextRequest) {
 
     // Get workspace path
     const workspacePath = path.join(process.cwd(), '..', 'workspace-projects', projectId);
-    
+
     // Check if package.json exists
     try {
       await fs.access(path.join(workspacePath, 'package.json'));
     } catch {
-      return NextResponse.json({ 
-        error: 'No package.json found. Is the project initialized?' 
+      return NextResponse.json({
+        error: 'No package.json found. Is the project initialized?'
       }, { status: 400 });
     }
+
+    // ALWAYS clear cache directories before starting dev server
+    // This ensures fresh compilation and prevents stale code from being served
+    console.log('Clearing cache directories for fresh start...');
+    await clearCacheDirectories(workspacePath);
     
     // Check if node_modules exists, if not install dependencies first
     try {
@@ -319,36 +352,7 @@ export async function POST(request: NextRequest) {
     // Run build validation before starting dev server (unless skipped)
     if (!skipValidation) {
       console.log('Running build validation before starting dev server...');
-      
-      // Clean build artifacts before validation to ensure fresh build
-      const nextBuildDir = path.join(workspacePath, '.next');
-      const distDir = path.join(workspacePath, 'dist');
-      const buildDir = path.join(workspacePath, 'build');
-      
-      try {
-        // Remove .next folder for Next.js projects
-        await fs.rm(nextBuildDir, { recursive: true, force: true });
-        console.log('Cleaned .next build directory');
-      } catch (err) {
-        // Directory doesn't exist, which is fine
-      }
-      
-      try {
-        // Remove dist folder for Vite projects
-        await fs.rm(distDir, { recursive: true, force: true });
-        console.log('Cleaned dist build directory');
-      } catch (err) {
-        // Directory doesn't exist, which is fine
-      }
-      
-      try {
-        // Remove build folder for CRA projects
-        await fs.rm(buildDir, { recursive: true, force: true });
-        console.log('Cleaned build directory');
-      } catch (err) {
-        // Directory doesn't exist, which is fine
-      }
-      
+
       // Detect project type from package.json
       const packageJsonPath = path.join(workspacePath, 'package.json');
       const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
@@ -827,6 +831,11 @@ export async function DELETE(request: NextRequest) {
 
     console.log(`Stopped dev server for project ${projectId}`);
 
+    // Clear cache directories after stopping to ensure fresh start on next run
+    const workspacePath = path.join(process.cwd(), '..', 'workspace-projects', projectId);
+    console.log('Clearing cache directories after stopping dev server...');
+    await clearCacheDirectories(workspacePath);
+
     // Clear session dev server info
     const sessionState = await prisma.sessionState.findFirst({
       where: {
@@ -849,7 +858,7 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: 'Dev server stopped'
+      message: 'Dev server stopped and cache cleared'
     });
 
   } catch (error: any) {

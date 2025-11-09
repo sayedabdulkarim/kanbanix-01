@@ -3,7 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import Anthropic from '@anthropic-ai/sdk';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { promisify } from 'util';
 import { buildSystemDetector } from './build-system-detector.js';
 import { StubGenerator } from './stub-generator.js';
@@ -258,6 +258,71 @@ class BuildValidator {
     this.anthropic = anthropic;
   }
 
+  /**
+   * Ensure dependencies are installed before running build
+   * Prevents exit code 127 "command not found" errors
+   */
+  async ensureDependenciesInstalled(workspacePath) {
+    console.log('[BuildValidator] Checking dependencies...');
+
+    // Step 1: Check if node_modules exists
+    const nodeModulesPath = path.join(workspacePath, 'node_modules');
+    try {
+      await fs.access(nodeModulesPath);
+      console.log('[BuildValidator] ✅ node_modules found');
+      return; // Dependencies already installed, exit early
+    } catch {
+      // node_modules doesn't exist, continue to install
+    }
+
+    // Step 2: Check if package.json exists
+    const packageJsonPath = path.join(workspacePath, 'package.json');
+    try {
+      await fs.access(packageJsonPath);
+    } catch {
+      console.log('[BuildValidator] ⚠️ No package.json found, skipping install');
+      return; // Not a Node.js project
+    }
+
+    // Step 3: Detect which package manager to use
+    const yarnLockPath = path.join(workspacePath, 'yarn.lock');
+    const packageLockPath = path.join(workspacePath, 'package-lock.json');
+    const pnpmLockPath = path.join(workspacePath, 'pnpm-lock.yaml');
+
+    let installCommand;
+    try {
+      await fs.access(yarnLockPath);
+      installCommand = 'yarn install';
+      console.log('[BuildValidator] Detected yarn.lock → using yarn');
+    } catch {
+      try {
+        await fs.access(pnpmLockPath);
+        installCommand = 'pnpm install';
+        console.log('[BuildValidator] Detected pnpm-lock.yaml → using pnpm');
+      } catch {
+        installCommand = 'npm install';
+        console.log('[BuildValidator] Using npm (default)');
+      }
+    }
+
+    // Step 4: Run installation
+    console.log(`[BuildValidator] Running: ${installCommand}`);
+    console.log('[BuildValidator] This may take a moment...');
+
+    try {
+      execSync(installCommand, {
+        cwd: workspacePath,
+        stdio: 'inherit', // Show installation progress
+        timeout: 300000 // 5 minute timeout
+      });
+
+      console.log('[BuildValidator] ✅ Dependencies installed successfully');
+    } catch (error) {
+      console.error('[BuildValidator] ❌ Failed to install dependencies:', error.message);
+      throw new Error(`Dependency installation failed: ${error.message}`);
+    }
+  }
+
   async validateWithReflectionLoop(workspacePath, generatedFiles, maxAttempts = 5) {
     // Skip validation if explicitly disabled
     if (process.env.SKIP_BUILD_VALIDATION === 'true') {
@@ -266,8 +331,13 @@ class BuildValidator {
     }
 
     console.log('[BuildValidator] Starting build validation with Reflection Loop...');
+
+    // NEW: Ensure dependencies are installed before attempting build
+    // This prevents exit code 127 "command not found" errors
+    await this.ensureDependenciesInstalled(workspacePath);
+
     let attempt = 0;
-    
+
     while (attempt < maxAttempts) {
       console.log(`[BuildValidator] Attempt ${attempt + 1}/${maxAttempts}`);
       
@@ -373,17 +443,12 @@ class BuildValidator {
           } else {
             console.log(`[BuildValidator] Build failed with exit code ${code}`);
             const allOutput = stdout + stderr;
-            
-            // Extract error lines for better diagnosis
-            const errorLines = allOutput.split('\n').filter(line => 
-              line.includes('error') || 
-              line.includes('Error') ||
-              line.includes('Failed')
-            );
-            
-            resolve({ 
-              success: false, 
-              errors: errorLines.length > 0 ? errorLines : ['Build failed with exit code ' + code],
+
+            // Pass full output as single error block for intelligent parsing
+            // Don't filter lines here - categorizeErrors will extract what it needs
+            resolve({
+              success: false,
+              errors: [allOutput], // Pass full output for context-aware parsing
               fullOutput: allOutput,
               exitCode: code
             });
@@ -413,8 +478,9 @@ class BuildValidator {
   async categorizeErrors(errors, workspacePath) {
     // Direct pattern-based categorization - NO AI
     console.log('[BuildValidator] Categorizing errors directly from build output');
-    
+
     const categorized = {
+      duplicateImports: [],
       missingImports: [],
       typeErrors: [],
       syntaxErrors: [],
@@ -423,10 +489,17 @@ class BuildValidator {
       extensionMismatch: [],
       other: []
     };
-    
+
     for (const error of errors) {
+      // Duplicate declarations (Turbopack, ESLint, TypeScript)
+      if (error.match(/is defined multiple times/i) ||
+          error.match(/Duplicate identifier/i) ||
+          error.match(/already been declared/i) ||
+          error.match(/Identifier .* has already been declared/i)) {
+        categorized.duplicateImports.push(error);
+      }
       // Missing module/import errors - Updated patterns to handle both quoted and unquoted paths
-      if (error.match(/Module not found.*Can't resolve ['"]?([^'"]+)['"]?/i) ||
+      else if (error.match(/Module not found.*Can't resolve ['"]?([^'"]+)['"]?/i) ||
           error.match(/Cannot find module ['"]?([^'"]+)['"]?/i) ||
           error.match(/Could not resolve ['"]?([^'"]+)['"]?/i) ||
           error.match(/Can't resolve ['"]?([^'"]+)['"]?/i) ||
@@ -435,7 +508,7 @@ class BuildValidator {
         categorized.missingImports.push(error);
       }
       // TypeScript type errors
-      else if (error.match(/TS\d+:/i) || 
+      else if (error.match(/TS\d+:/i) ||
                error.match(/Type .* is not assignable to type/i) ||
                error.match(/Property .* does not exist on type/i)) {
         categorized.typeErrors.push(error);
@@ -471,9 +544,9 @@ class BuildValidator {
       }
     }
     
-    console.log(`[BuildValidator] Categorized: ${categorized.missingImports.length} imports, ${categorized.typeErrors.length} types, ${categorized.syntaxErrors.length} syntax, ${categorized.missingFiles.length} files, ${categorized.missingDeps.length} deps`);
+    console.log(`[BuildValidator] Categorized: ${categorized.duplicateImports.length} duplicates, ${categorized.missingImports.length} imports, ${categorized.typeErrors.length} types, ${categorized.syntaxErrors.length} syntax, ${categorized.missingFiles.length} files, ${categorized.missingDeps.length} deps`);
     console.log(`[BuildValidator] Found ${categorized.other.length} other`);
-    
+
     return categorized;
   }
   
@@ -485,6 +558,34 @@ class BuildValidator {
     const projectLanguage = buildInfo.language || 'unknown';
 
     console.log(`[BuildValidator] Generating fixes for ${projectLanguage} project`);
+
+    // PHASE 0: Handle asset file errors (images, icons) - DELETE corrupted files
+    console.log('[BuildValidator] Phase 0: Checking for corrupted asset files...');
+    const allErrors = [...(diagnosis.other || [])];
+    for (const error of allErrors) {
+      // Check for image/asset processing errors
+      if (error.includes('Processing image failed') ||
+          error.includes('unable to decode image') ||
+          error.includes('failed to fill whole buffer')) {
+
+        // Extract file path
+        const assetMatch = error.match(/\.\/[^\s]*?((?:src|app|components|public)\/[^\s]+\.(ico|png|jpg|jpeg|gif|svg|webp))/i);
+        if (assetMatch) {
+          const assetPath = assetMatch[1];
+          const fullPath = path.join(workspacePath, assetPath);
+
+          console.log(`[BuildValidator] 🗑️ Found corrupted asset: ${assetPath}`);
+
+          fixes.push({
+            type: 'delete_file',
+            path: fullPath,
+            reason: 'Corrupted or invalid asset file'
+          });
+
+          console.log(`[BuildValidator] ✅ Scheduled deletion of corrupted asset: ${assetPath}`);
+        }
+      }
+    }
 
     // PHASE 1: Fast deterministic fixes (no AI needed)
     console.log('[BuildValidator] Phase 1: Applying deterministic fixes...');
@@ -979,28 +1080,59 @@ class BuildValidator {
       // Extract file path from error message
       // Common patterns:
       // - ./src/app/page.tsx:1:8
+      // - ./workspace-projects/xxx/src/app/page.tsx:2:8 (Turbopack)
       // - src/components/Counter.tsx:25:10
       // - Type error in /full/path/to/file.tsx
 
       let filePath = null;
 
-      // Pattern 1: Relative path with line:col
-      const relativeMatch = error.match(/\.?\/?([^:\s]+\.[jt]sx?):(\d+):(\d+)/i);
-      if (relativeMatch) {
-        filePath = relativeMatch[1].replace(/^\.\//, '');
+      // Pattern 1: Any path (including workspace prefix) with line:col
+      // Matches: ./workspace-projects/xxx/src/app/page.tsx:2:8
+      const anyPathMatch = error.match(/\.\/[^\s:]*?([^/:\s]+\/[^/:\s]+\.[a-zA-Z0-9]+):(\d+):(\d+)/i);
+      if (anyPathMatch) {
+        // Extract just the relevant part (e.g., src/app/page.tsx from full path)
+        const fullMatch = anyPathMatch[0].split(':')[0]; // Get path without line:col
+        // Find the last two path segments (e.g., app/page.tsx)
+        const pathParts = fullMatch.split('/');
+        // Look for src/ or app/ or components/ as anchors
+        const srcIndex = pathParts.findIndex(p => p === 'src' || p === 'app' || p === 'components');
+        if (srcIndex !== -1) {
+          filePath = pathParts.slice(srcIndex).join('/');
+        } else {
+          // Fall back to last 2 segments
+          filePath = pathParts.slice(-2).join('/');
+        }
       }
 
-      // Pattern 2: File path in quotes
+      // Pattern 2: Turbopack/Webpack error format (file path on its own line)
+      // Matches: ./workspace-projects/xxx/src/app/favicon.ico
       if (!filePath) {
-        const quotedMatch = error.match(/["']([^"']+\.[jt]sx?)["']/);
+        const turbopackMatch = error.match(/\.\/[^\s]*?((?:src|app|components|public)\/[^\s]+\.[a-zA-Z0-9]+)/i);
+        if (turbopackMatch) {
+          const fullPath = turbopackMatch[1];
+          filePath = fullPath.replace(/^\.\//, '');
+        }
+      }
+
+      // Pattern 3: Simple relative path with line:col
+      if (!filePath) {
+        const relativeMatch = error.match(/\.?\/?([^:\s]+\.[a-zA-Z0-9]+):(\d+):(\d+)/i);
+        if (relativeMatch) {
+          filePath = relativeMatch[1].replace(/^\.\//, '');
+        }
+      }
+
+      // Pattern 4: File path in quotes
+      if (!filePath) {
+        const quotedMatch = error.match(/["']([^"']+\.[a-zA-Z0-9]+)["']/);
         if (quotedMatch) {
           filePath = quotedMatch[1].replace(/^\.\//, '');
         }
       }
 
-      // Pattern 3: "in <filename>"
+      // Pattern 5: "in <filename>"
       if (!filePath) {
-        const inMatch = error.match(/in\s+([^\s]+\.[jt]sx?)/i);
+        const inMatch = error.match(/in\s+([^\s]+\.[a-zA-Z0-9]+)/i);
         if (inMatch) {
           filePath = inMatch[1].replace(/^\.\//, '');
         }
@@ -1014,8 +1146,11 @@ class BuildValidator {
           grouped[filePath] = [];
         }
         grouped[filePath].push(error);
+        console.log(`[BuildValidator] ✓ Grouped error for file: ${filePath}`);
       } else {
-        console.log(`[BuildValidator] Could not extract file from error: ${error.substring(0, 100)}...`);
+        // Show FULL error (not truncated) for better debugging
+        console.log(`[BuildValidator] Could not extract file from error:`);
+        console.log(error); // Full error, not truncated!
       }
     }
 
@@ -1301,7 +1436,20 @@ ${errors.map((err, i) => `${i + 1}. ${err}`).join('\n')}
             // This would need to scan files and update import statements
             console.log(`[BuildValidator] Import fix needed: ${fix.from} → ${fix.to}`);
             break;
-            
+
+          case 'delete_file':
+            // Delete corrupted/invalid file
+            try {
+              await fs.unlink(fix.path);
+              console.log(`[BuildValidator] 🗑️ Deleted corrupted file: ${path.relative(workspacePath, fix.path)}`);
+              console.log(`[BuildValidator] Reason: ${fix.reason}`);
+            } catch (unlinkError) {
+              if (unlinkError.code !== 'ENOENT') {
+                console.error(`[BuildValidator] Failed to delete ${fix.path}:`, unlinkError.message);
+              }
+            }
+            break;
+
           default:
             console.log(`[BuildValidator] Unknown fix type: ${fix.type}`);
         }
@@ -2058,19 +2206,38 @@ Return ONLY valid JSON, no markdown or explanations.`;
           // If file exists and we're modifying, try to merge intelligently
           if (exists && generatedCode.operation_type !== 'replace') {
             console.log(`[Context-Enhanced] File exists: ${filePath}, attempting intelligent merge...`);
-            
+
             try {
               const existingContent = await fs.readFile(fullPath, 'utf-8');
-              
+
               // Check if this is a modification with specific instructions
               if (generatedCode.modifications && generatedCode.modifications[filePath]) {
-                // Apply specific modifications (like adding imports, functions, etc.)
-                fileContent = await applyFileModifications(
-                  existingContent, 
-                  fileContent,
-                  generatedCode.modifications[filePath]
-                );
-                console.log(`[Context-Enhanced] Applied targeted modifications to: ${filePath}`);
+                // IMPORTANT: If we have BOTH complete file content AND modifications,
+                // the complete file content from AI is the source of truth.
+                // Only use modifications to ADD missing pieces, not to replace AI's complete solution.
+
+                const modification = generatedCode.modifications[filePath];
+
+                // If the new content looks like a complete file replacement (has export default, return statement, etc.)
+                // then trust it over the modification instructions
+                const looksLikeCompleteFile = fileContent.includes('export default') ||
+                                             fileContent.includes('return (') ||
+                                             fileContent.includes('export function');
+
+                if (looksLikeCompleteFile && fileContent.length > existingContent.length * 0.5) {
+                  // The AI provided complete new content that's substantial
+                  // Trust it over modification instructions and just use it
+                  console.log(`[Context-Enhanced] Using complete file content from AI (${fileContent.length} chars), ignoring modification merge`);
+                  // fileContent stays as the new complete content - don't apply modifications
+                } else {
+                  // Apply specific modifications (like adding imports, functions, etc.)
+                  fileContent = await applyFileModifications(
+                    existingContent,
+                    fileContent,
+                    modification
+                  );
+                  console.log(`[Context-Enhanced] Applied targeted modifications to: ${filePath}`);
+                }
               } else {
                 // Try to intelligently merge based on file type
                 const fileExt = path.extname(filePath);

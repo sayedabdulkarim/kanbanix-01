@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
@@ -85,6 +85,66 @@ class BuildValidator {
   }
 
   /**
+   * Ensure dependencies are installed before running build
+   * Prevents exit code 127 "command not found" errors
+   */
+  async ensureDependenciesInstalled(projectPath) {
+    console.log('[BuildValidator] Checking dependencies...');
+
+    // Step 1: Check if node_modules exists
+    const nodeModulesPath = path.join(projectPath, 'node_modules');
+    const nodeModulesExists = fsSync.existsSync(nodeModulesPath);
+
+    if (nodeModulesExists) {
+      console.log('[BuildValidator] ✅ node_modules found');
+      return; // Dependencies already installed, exit early
+    }
+
+    // Step 2: Check if package.json exists
+    const packageJsonPath = path.join(projectPath, 'package.json');
+    const packageJsonExists = fsSync.existsSync(packageJsonPath);
+
+    if (!packageJsonExists) {
+      console.log('[BuildValidator] ⚠️ No package.json found, skipping install');
+      return; // Not a Node.js project
+    }
+
+    // Step 3: Detect which package manager to use
+    const yarnLockPath = path.join(projectPath, 'yarn.lock');
+    const packageLockPath = path.join(projectPath, 'package-lock.json');
+    const pnpmLockPath = path.join(projectPath, 'pnpm-lock.yaml');
+
+    let installCommand;
+    if (fsSync.existsSync(yarnLockPath)) {
+      installCommand = 'yarn install';
+      console.log('[BuildValidator] Detected yarn.lock → using yarn');
+    } else if (fsSync.existsSync(pnpmLockPath)) {
+      installCommand = 'pnpm install';
+      console.log('[BuildValidator] Detected pnpm-lock.yaml → using pnpm');
+    } else {
+      installCommand = 'npm install';
+      console.log('[BuildValidator] Using npm (default)');
+    }
+
+    // Step 4: Run installation
+    console.log(`[BuildValidator] Running: ${installCommand}`);
+    console.log('[BuildValidator] This may take a moment...');
+
+    try {
+      execSync(installCommand, {
+        cwd: projectPath,
+        stdio: 'inherit', // Show installation progress
+        timeout: 300000 // 5 minute timeout
+      });
+
+      console.log('[BuildValidator] ✅ Dependencies installed successfully');
+    } catch (error) {
+      console.error('[BuildValidator] ❌ Failed to install dependencies:', error.message);
+      throw new Error(`Dependency installation failed: ${error.message}`);
+    }
+  }
+
+  /**
    * Main validation loop - build, check errors, fix with LLM if needed
    * Adapted from SynthAI's llm-build-validator.js
    */
@@ -105,14 +165,18 @@ class BuildValidator {
     
     console.log(`[Build Validator] Starting validation for project: ${projectPath} (mode: ${this.mode})`);
     this.debug('Task description', taskDescription);
-    
+
     // Skip cleanup when dev server might be running
     // Dev servers need their build folders (.next, dist, etc.) to serve pages
     // Only clean if explicitly requested or if we detect no dev server
     if (this.mode === 'strict' && !process.env.DEV_SERVER_RUNNING) {
       await this.cleanupIncompleteBuilds(projectPath);
     }
-    
+
+    // NEW: Ensure dependencies are installed before attempting build
+    // This prevents exit code 127 "command not found" errors
+    await this.ensureDependenciesInstalled(projectPath);
+
     while (attempt < this.maxAttempts) {
       attempt++;
       
