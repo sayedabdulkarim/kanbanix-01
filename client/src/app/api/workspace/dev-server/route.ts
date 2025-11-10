@@ -299,7 +299,28 @@ export async function POST(request: NextRequest) {
     // This ensures fresh compilation and prevents stale code from being served
     console.log('Clearing cache directories for fresh start...');
     await clearCacheDirectories(workspacePath);
-    
+
+    // Check for and remove potentially corrupted favicon.ico files
+    // These often cause "unable to decode image" build errors in Next.js
+    // It's safer to remove them and let developers add their own
+    console.log('Checking for potentially problematic favicon files...');
+    const faviconPatterns = [
+      path.join(workspacePath, 'src', 'app', 'favicon.ico'),
+      path.join(workspacePath, 'public', 'favicon.ico'),
+      path.join(workspacePath, 'app', 'favicon.ico')
+    ];
+
+    for (const faviconPath of faviconPatterns) {
+      try {
+        await fs.access(faviconPath);
+        // File exists - remove it preemptively to avoid build errors
+        console.log(`🗑️ Removing favicon to prevent build errors: ${path.relative(workspacePath, faviconPath)}`);
+        await fs.unlink(faviconPath);
+      } catch {
+        // File doesn't exist, which is fine
+      }
+    }
+
     // Check if node_modules exists, if not install dependencies first
     try {
       await fs.access(path.join(workspacePath, 'node_modules'));

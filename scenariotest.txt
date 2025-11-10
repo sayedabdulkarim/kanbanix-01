@@ -16,7 +16,8 @@ PROJECT 2: Todo App
 3. Add delete button to each todo item
     Create a TodoList component with add todo input also Add delete button to each todo item
 
-4. Create a Footer component with copyright
+4. Create a Footer component with copyright, and place it below the page
+
 5. Add Footer to the home page
 
 PROJECT 3: Blog App
