@@ -24,6 +24,7 @@ PROJECT 3: Blog App
 -------------------
 1. Create a Next.js blank project
 2. Create a Navbar component with logo and links
+    Create a Counter component with increment and decrement buttons and Remove all Next.js boilerplate content except the Counter and Navbar component
 3. Create a BlogPost card component
 4. Create a blog list page displaying multiple posts
 5. Create a dynamic [slug] page for individual posts
