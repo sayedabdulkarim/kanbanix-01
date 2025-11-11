@@ -252,15 +252,13 @@ export async function POST(request: NextRequest) {
         // Preserve dev server info from the active session
         let devServerInfo = {
           port: null as number | null,
-          url: null as string | null,
-          startedAt: null as Date | null
+          url: null as string | null
         };
-        
+
         if (activeSessions.length > 0 && activeSessions[0].devServerPort) {
           devServerInfo = {
             port: activeSessions[0].devServerPort,
-            url: activeSessions[0].devServerUrl,
-            startedAt: activeSessions[0].devServerStartedAt
+            url: activeSessions[0].devServerUrl
           };
           console.log(`Preserving dev server info - port: ${devServerInfo.port}`);
         }
@@ -313,9 +311,9 @@ export async function POST(request: NextRequest) {
                 prUrl: null,
                 prNumber: null,
                 // Preserve dev server info from previous session
+                devServerStarted: !!devServerInfo.port,
                 devServerPort: devServerInfo.port,
-                devServerUrl: devServerInfo.url,
-                devServerStartedAt: devServerInfo.startedAt
+                devServerUrl: devServerInfo.url
               }
             });
             
@@ -353,9 +351,9 @@ export async function POST(request: NextRequest) {
                   prUrl: null,
                   prNumber: null,
                   // Preserve dev server info from previous session
+                  devServerStarted: !!devServerInfo.port,
                   devServerPort: devServerInfo.port,
-                  devServerUrl: devServerInfo.url,
-                  devServerStartedAt: devServerInfo.startedAt
+                  devServerUrl: devServerInfo.url
                 }
               });
               
